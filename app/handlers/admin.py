@@ -10,8 +10,13 @@ from aiogram.types import CallbackQuery, Message
 from app.config import ADMIN_IDS
 from app.keyboards import APPEAL_REPLY_CALLBACK_PREFIX, admin_reply_keyboard
 from app.models import Appeal, Suggestion, User
-from app.services.appeal_service import complete_appeal, get_appeal_by_id, set_appeal_in_progress
+from app.services.appeal_service import claim_appeal, complete_appeal, get_appeal_by_id
 from app.services.datetime_utils import format_tashkent
+from app.services.telegram_delivery import (
+    TELEGRAM_MESSAGE_LIMIT,
+    safe_edit_message_text,
+    send_long_message,
+)
 from app.services.user_service import get_user_by_id
 from app.states import AdminStates
 
@@ -24,6 +29,9 @@ MAX_REPLY_LENGTH = 4000
 
 NOT_ADMIN_TEXT = "Сизда ушбу амални бажариш ҳуқуқи мавжуд эмас."
 APPEAL_NOT_FOUND_TEXT = "Мурожаат топилмади."
+ALREADY_CLAIMED_TEXT = (
+    "Бу мурожаат аллақачон бошқа админ томонидан қабул қилинган."
+)
 GENERIC_ADMIN_ERROR_TEXT = "Хатолик юз берди. Илтимос, бироздан сўнг қайта уриниб кўринг."
 STATE_LOST_TEXT = "Хатолик юз берди. Илтимос, мурожаат остидаги тугмани қайта босинг."
 ASK_REPLY_TEXT = "Мурожаатга жавоб матнини ёзинг:"
@@ -55,16 +63,34 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
     A failure sending to one admin is logged and does not stop the rest from
     being notified. If ADMIN_IDS is empty this is a no-op (startup already logs
     a warning about that -- see app/main.py).
+
+    MVP audit CRITICAL #1: appeal_text can be up to 4000 characters, and with
+    the header/footer added this can exceed Telegram's 4096-char message
+    limit -- previously that made the whole send silently fail (caught by the
+    try/except below and only logged), so the admin never saw the appeal at
+    all. Now: if the combined text fits in one message, it's sent exactly as
+    before (single message, button attached, unchanged behavior for the
+    common case). If it doesn't fit, the body is sent first (as one or more
+    messages, split on line boundaries -- see send_long_message), followed by
+    a short footer message that always fits and carries the reply button, so
+    the button is never lost and is always attached to a message that stays
+    editable within the limit later (see process_admin_reply_text).
     """
     if not ADMIN_IDS:
         return
 
-    text = _build_notification_text(appeal, user)
+    body_text = _build_appeal_body_text(appeal, user)
+    footer_text = _build_appeal_footer_text(appeal, completed=False)
+    full_text = f"{body_text}\n\n{footer_text}"
     keyboard = admin_reply_keyboard(appeal.id)
 
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, text, reply_markup=keyboard)
+            if len(full_text) <= TELEGRAM_MESSAGE_LIMIT:
+                await send_long_message(bot, admin_id, full_text, reply_markup=keyboard)
+            else:
+                await send_long_message(bot, admin_id, body_text)
+                await send_long_message(bot, admin_id, footer_text, reply_markup=keyboard)
         except Exception:
             logger.exception("Failed to notify admin %s about appeal %s", admin_id, appeal.appeal_number)
 
@@ -76,6 +102,10 @@ async def notify_admins_new_suggestion(bot: Bot, suggestion: Suggestion, user: U
     sending to one admin is logged and does not stop the rest from being
     notified. No "Жавоб бериш" button is attached -- admin replies to
     suggestions are not implemented yet. If ADMIN_IDS is empty this is a no-op.
+
+    MVP audit CRITICAL #1: no button is involved here, so a text that exceeds
+    Telegram's 4096-char limit is simply delivered as multiple messages via
+    send_long_message instead of silently failing to send at all.
     """
     if not ADMIN_IDS:
         return
@@ -84,7 +114,7 @@ async def notify_admins_new_suggestion(bot: Bot, suggestion: Suggestion, user: U
 
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, text)
+            await send_long_message(bot, admin_id, text)
         except Exception:
             logger.exception(
                 "Failed to notify admin %s about suggestion %s", admin_id, suggestion.suggestion_number
@@ -102,16 +132,34 @@ async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMConte
         await callback.answer(APPEAL_NOT_FOUND_TEXT, show_alert=True)
         return
 
-    appeal = await get_appeal_by_id(appeal_id)
+    # Atomic first-claim-wins update (MVP audit CRITICAL #2 / instruction #5):
+    # only the request that actually flips the appeal from NEW to IN_PROGRESS
+    # "wins". If it's already claimed by THIS SAME admin (a redelivered
+    # Telegram callback_query for the same click -- instruction #4's
+    # idempotency requirement), treat it as a safe no-op and proceed exactly
+    # as if this were the winning claim. If it's claimed by a DIFFERENT admin,
+    # refuse with a clear message instead of silently overwriting them.
+    try:
+        appeal, claimed = await claim_appeal(appeal_id, callback.from_user.id)
+    except Exception:
+        logger.exception("Failed to claim appeal %s", appeal_id)
+        await callback.answer(GENERIC_ADMIN_ERROR_TEXT, show_alert=True)
+        return
+
     if appeal is None:
         await callback.answer(APPEAL_NOT_FOUND_TEXT, show_alert=True)
         return
 
-    try:
-        await set_appeal_in_progress(appeal_id, callback.from_user.id)
-    except Exception:
-        logger.exception("Failed to mark appeal %s as IN_PROGRESS", appeal_id)
-        await callback.answer(GENERIC_ADMIN_ERROR_TEXT, show_alert=True)
+    if not claimed and appeal.admin_id != callback.from_user.id:
+        await callback.answer(ALREADY_CLAIMED_TEXT, show_alert=True)
+        if callback.message is not None:
+            try:
+                # Best-effort: drop the now-stale button on this admin's own
+                # copy so they can't try to claim it again. Purely cosmetic --
+                # the claim guard above is what actually prevents double-claim.
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                logger.exception("Failed to clear stale reply button for appeal %s", appeal_id)
         return
 
     await state.set_state(AdminStates.waiting_for_reply)
@@ -169,9 +217,12 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
 
     # Deliver to the citizen FIRST. Only persist admin_answer/COMPLETED once
     # delivery actually succeeded -- otherwise the citizen would never see a
-    # reply that the database claims was already sent.
+    # reply that the database claims was already sent. citizen_text can
+    # exceed 4096 chars when admin_answer is near its 4000-char max (MVP audit
+    # CRITICAL #1), so this goes through send_long_message instead of a plain
+    # send_message.
     try:
-        await message.bot.send_message(user.telegram_id, citizen_text)
+        await send_long_message(message.bot, user.telegram_id, citizen_text)
     except Exception:
         logger.exception(
             "Failed to deliver admin reply to user %s for appeal %s", user.telegram_id, appeal_id
@@ -193,16 +244,34 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
     await message.answer(REPLY_SUCCESS_TEXT)
 
     if completed_appeal is not None and notify_chat_id is not None and notify_message_id is not None:
+        # Update the admin's own notification to reflect COMPLETED status
+        # (and drop the now-answered button, by omitting reply_markup on the
+        # edit). The admin's answer itself is always sent as its own separate
+        # message below rather than folded into this edit -- that keeps the
+        # edit itself within the 4096-char limit regardless of how long the
+        # answer is (MVP audit CRITICAL #1), instead of the previous
+        # behavior of embedding it directly, which could silently fail to
+        # apply for a long appeal_text + long admin_answer combination.
+        body_text = _build_appeal_body_text(completed_appeal, user)
+        completed_footer = _build_appeal_footer_text(completed_appeal, completed=True)
+        combined = f"{body_text}\n\n{completed_footer}"
+        edit_text = combined if len(combined) <= TELEGRAM_MESSAGE_LIMIT else completed_footer
+
         try:
-            await message.bot.edit_message_text(
-                chat_id=notify_chat_id,
-                message_id=notify_message_id,
-                text=_build_notification_text(completed_appeal, user, admin_answer=admin_answer),
+            await safe_edit_message_text(
+                message.bot, chat_id=notify_chat_id, message_id=notify_message_id, text=edit_text
             )
         except Exception:
             # Purely cosmetic (the reply was already sent and saved) -- never
             # let this break the main flow.
             logger.exception("Failed to update admin notification message for appeal %s", appeal_id)
+
+        try:
+            await send_long_message(
+                message.bot, notify_chat_id, _build_answer_followup_text(completed_appeal, admin_answer)
+            )
+        except Exception:
+            logger.exception("Failed to send answer follow-up message for appeal %s", appeal_id)
 
 
 @router.message(AdminStates.waiting_for_reply)
@@ -221,14 +290,16 @@ def _parse_appeal_id(callback_data: str | None) -> int | None:
         return None
 
 
-def _build_notification_text(appeal: Appeal, user: User, *, admin_answer: str | None = None) -> str:
-    completed = admin_answer is not None
-    header = "🟢 <b>Мурожаат кўриб чиқилди</b>" if completed else "🔔 <b>Янги мурожаат</b>"
-    status_emoji = "🟢" if completed else "🟡"
-    status_label = "COMPLETED" if completed else "NEW"
+def _build_appeal_body_text(appeal: Appeal, user: User) -> str:
+    """Everything about the appeal except the timestamp/status footer.
 
+    Split out from the old single ``_build_notification_text`` so it can be
+    sent on its own (see ``notify_admins_new_appeal``) when the combined
+    message would exceed Telegram's 4096-char limit. This part never changes
+    once the appeal is created, so it's reused as-is for the completion edit.
+    """
     lines = [
-        header,
+        "🔔 <b>Янги мурожаат</b>",
         "",
         f"🆔 <b>Рақам:</b> {html.escape(appeal.appeal_number)}",
         "",
@@ -242,19 +313,33 @@ def _build_notification_text(appeal: Appeal, user: User, *, admin_answer: str | 
         "",
         "📝 <b>Мурожаат:</b>",
         html.escape(appeal.appeal_text),
-        "",
     ]
+    return "\n".join(lines)
 
-    if completed:
-        lines += ["💬 <b>Админ жавоби:</b>", html.escape(admin_answer), ""]
 
-    lines += [
+def _build_appeal_footer_text(appeal: Appeal, *, completed: bool) -> str:
+    """The short timestamp/status line -- always well within the 4096 limit.
+
+    Sent as its own final message (carrying the reply button) whenever the
+    body doesn't fit alongside it; always used as-is for the completion edit,
+    since it never grows with the appeal/answer text.
+    """
+    status_emoji = "🟢" if completed else "🟡"
+    status_label = "COMPLETED" if completed else "NEW"
+    lines = [
         f"🕐 <b>Юборилган вақт:</b> {format_tashkent(appeal.created_at)}",
         "",
         f"{status_emoji} <b>Ҳолат:</b> {status_label}",
     ]
-
     return "\n".join(lines)
+
+
+def _build_answer_followup_text(appeal: Appeal, admin_answer: str) -> str:
+    """The admin's own answer, shown back to them as a separate confirmation message."""
+    return (
+        f"💬 <b>Жавоб юборилди</b> (Мурожаат {html.escape(appeal.appeal_number)}):\n\n"
+        f"{html.escape(admin_answer)}"
+    )
 
 
 def _build_suggestion_notification_text(suggestion: Suggestion, user: User) -> str:

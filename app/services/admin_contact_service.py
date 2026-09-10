@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.database import async_session
 from app.models import AdminContact, User
@@ -83,25 +83,33 @@ async def get_admin_contact_by_id(contact_id: int) -> AdminContact | None:
         return result.scalar_one_or_none()
 
 
-async def set_admin_contact_in_progress(contact_id: int, admin_id: int) -> AdminContact | None:
-    """Mark an admin contact message as being handled by an admin.
+async def claim_admin_contact(contact_id: int, admin_id: int) -> tuple[AdminContact | None, bool]:
+    """Atomically mark an admin-contact message as being handled by ``admin_id``.
 
-    Sets status=IN_PROGRESS and records which admin picked it up. Returns None
-    if no contact with this id exists (caller should treat that as "not found").
+    Mirrors ``app.services.appeal_service.claim_appeal`` -- same first-claim-
+    wins rationale (MVP audit CRITICAL #2 / instruction #5): a conditional
+    ``UPDATE ... WHERE status = 'NEW'`` so two admins clicking "Жавоб бериш"
+    on the same message can't both end up handling it.
+
+    Returns ``(contact, claimed)``:
+    - ``(None, False)`` -- no contact with this id exists.
+    - ``(contact, True)`` -- this call claimed it just now (status was NEW).
+    - ``(contact, False)`` -- already claimed (by this same admin on a
+      redelivered Telegram update, or by a different one) --
+      ``contact.admin_id`` tells the caller who. No write happened.
     """
     async with async_session() as session:
         async with session.begin():
-            result = await session.execute(select(AdminContact).where(AdminContact.id == contact_id))
-            contact = result.scalar_one_or_none()
+            result = await session.execute(
+                update(AdminContact)
+                .where(AdminContact.id == contact_id, AdminContact.status == "NEW")
+                .values(status="IN_PROGRESS", admin_id=admin_id, updated_at=utcnow())
+            )
+            claimed = result.rowcount > 0
 
-            if contact is None:
-                return None
+            contact = await session.get(AdminContact, contact_id)
 
-            contact.status = "IN_PROGRESS"
-            contact.admin_id = admin_id
-            contact.updated_at = utcnow()
-
-        return contact
+        return contact, claimed
 
 
 async def complete_admin_contact(

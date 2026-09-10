@@ -16,12 +16,18 @@ from app.keyboards import (
 )
 from app.models import AdminContact, User
 from app.services.admin_contact_service import (
+    claim_admin_contact,
     complete_admin_contact,
     create_admin_contact,
     get_admin_contact_by_id,
-    set_admin_contact_in_progress,
 )
 from app.services.datetime_utils import format_tashkent
+from app.services.rate_limit import already_processed, is_rate_limited
+from app.services.telegram_delivery import (
+    TELEGRAM_MESSAGE_LIMIT,
+    safe_edit_message_text,
+    send_long_message,
+)
 from app.services.user_service import get_user_by_id
 from app.services.validators import is_valid_admin_contact_message
 from app.states import AdminContactReplyStates, AdminContactStates
@@ -33,11 +39,22 @@ router = Router()
 MIN_REPLY_LENGTH = 2
 MAX_REPLY_LENGTH = 4000
 
+# MVP audit MEDIUM #8 / instruction #7: cap how many admin-contact messages a
+# single citizen can submit in a short window, so accidental or careless
+# rapid-fire re-sends can't spam every admin. Deliberately generous (well
+# above any plausible normal-use rate) so it never blocks a genuine user --
+# see app/services/rate_limit.py for the (Redis-swappable) backend.
+RATE_LIMIT_MAX_SUBMISSIONS = 3
+RATE_LIMIT_WINDOW_SECONDS = 60.0
+
 NOT_PROVIDED_TEXT = "Маълумот киритилмаган"
 
 ASK_MESSAGE_TEXT = "💬 Админга юбориш учун хабарингизни ёзинг:"
 INVALID_MESSAGE_TEXT = (
     "Хабар матни нотўғри. Илтимос, камида 2, кўпи билан 4000 та белгидан иборат матн киритинг."
+)
+RATE_LIMITED_TEXT = (
+    "⏳ Сиз жуда тез-тез хабар юбормоқдасиз. Илтимос, бир оз кутиб қайта уриниб кўринг."
 )
 CONTACT_SUCCESS_TEXT_TEMPLATE = (
     "✅ Хабарингиз қабул қилинди.\n\n"
@@ -48,6 +65,9 @@ GENERIC_ERROR_TEXT = "Хатолик юз берди. Илтимос, бироз
 
 NOT_ADMIN_TEXT = "Сизда ушбу амални бажариш ҳуқуқи мавжуд эмас."
 CONTACT_NOT_FOUND_TEXT = "Мурожаат топилмади."
+ALREADY_CLAIMED_TEXT = (
+    "Бу мурожаат аллақачон бошқа админ томонидан қабул қилинган."
+)
 STATE_LOST_TEXT = "Хатолик юз берди. Илтимос, мурожаат остидаги тугмани қайта босинг."
 ASK_REPLY_TEXT = "Мурожаатга жавоб матнини ёзинг:"
 INVALID_REPLY_TEXT = (
@@ -80,16 +100,27 @@ async def notify_admins_new_contact(bot: Bot, contact: AdminContact, user: User 
     Mirrors notify_admins_new_appeal's best-effort semantics: a failure
     sending to one admin is logged and does not stop the rest from being
     notified. If ADMIN_IDS is empty this is a no-op.
+
+    MVP audit CRITICAL #1: message_text can be up to 4000 characters, which
+    combined with the header/footer can exceed Telegram's 4096-char message
+    limit -- see app.handlers.admin.notify_admins_new_appeal for the full
+    rationale; the split-when-needed strategy here is identical.
     """
     if not ADMIN_IDS:
         return
 
-    text = _build_notification_text(contact, user)
+    body_text = _build_contact_body_text(contact, user)
+    footer_text = _build_contact_footer_text(contact, completed=False)
+    full_text = f"{body_text}\n\n{footer_text}"
     keyboard = admin_contact_reply_keyboard(contact.id)
 
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(admin_id, text, reply_markup=keyboard)
+            if len(full_text) <= TELEGRAM_MESSAGE_LIMIT:
+                await send_long_message(bot, admin_id, full_text, reply_markup=keyboard)
+            else:
+                await send_long_message(bot, admin_id, body_text)
+                await send_long_message(bot, admin_id, footer_text, reply_markup=keyboard)
         except Exception:
             logger.exception(
                 "Failed to notify admin %s about admin contact %s", admin_id, contact.contact_number
@@ -114,6 +145,25 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
 
     if not is_valid_admin_contact_message(message_text):
         await message.answer(INVALID_MESSAGE_TEXT)
+        return
+
+    if is_rate_limited(
+        f"admin_contact_create:{message.from_user.id}",
+        limit=RATE_LIMIT_MAX_SUBMISSIONS,
+        window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        await message.answer(RATE_LIMITED_TEXT)
+        return
+
+    # Idempotency (MVP audit instruction #4): guards against Telegram
+    # redelivering the same update (message_id is unique per chat, so a
+    # genuinely new message from the user is never mistaken for a duplicate).
+    if already_processed(f"admin_contact_create:{message.chat.id}:{message.message_id}"):
+        logger.info(
+            "Ignoring duplicate delivery of message %s in chat %s (admin contact create)",
+            message.message_id,
+            message.chat.id,
+        )
         return
 
     try:
@@ -158,16 +208,28 @@ async def process_admin_contact_reply_callback(callback: CallbackQuery, state: F
         await callback.answer(CONTACT_NOT_FOUND_TEXT, show_alert=True)
         return
 
-    contact = await get_admin_contact_by_id(contact_id)
+    # Atomic first-claim-wins update -- see app.services.appeal_service.claim_appeal
+    # for the full rationale (MVP audit CRITICAL #2 / instruction #5). A claim
+    # already held by THIS SAME admin (redelivered callback_query -- instruction
+    # #4) is treated as a safe no-op; held by a DIFFERENT admin is refused.
+    try:
+        contact, claimed = await claim_admin_contact(contact_id, callback.from_user.id)
+    except Exception:
+        logger.exception("Failed to claim admin contact %s", contact_id)
+        await callback.answer(GENERIC_ERROR_TEXT, show_alert=True)
+        return
+
     if contact is None:
         await callback.answer(CONTACT_NOT_FOUND_TEXT, show_alert=True)
         return
 
-    try:
-        await set_admin_contact_in_progress(contact_id, callback.from_user.id)
-    except Exception:
-        logger.exception("Failed to mark admin contact %s as IN_PROGRESS", contact_id)
-        await callback.answer(GENERIC_ERROR_TEXT, show_alert=True)
+    if not claimed and contact.admin_id != callback.from_user.id:
+        await callback.answer(ALREADY_CLAIMED_TEXT, show_alert=True)
+        if callback.message is not None:
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                logger.exception("Failed to clear stale reply button for admin contact %s", contact_id)
         return
 
     await state.set_state(AdminContactReplyStates.waiting_for_reply)
@@ -225,9 +287,11 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
 
     # Deliver to the citizen FIRST. Only persist admin_answer/COMPLETED once
     # delivery actually succeeded -- otherwise the citizen would never see a
-    # reply that the database claims was already sent.
+    # reply that the database claims was already sent. user_text can exceed
+    # 4096 chars when admin_answer is near its 4000-char max (MVP audit
+    # CRITICAL #1), so this goes through send_long_message.
     try:
-        await message.bot.send_message(user.telegram_id, user_text)
+        await send_long_message(message.bot, user.telegram_id, user_text)
     except Exception:
         logger.exception(
             "Failed to deliver admin contact reply to user %s for contact %s",
@@ -251,11 +315,19 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
     await message.answer(REPLY_SUCCESS_TEXT)
 
     if completed_contact is not None and notify_chat_id is not None and notify_message_id is not None:
+        # Update the admin's own notification to reflect COMPLETED status
+        # (dropping the now-answered button, by omitting reply_markup on the
+        # edit). The admin's answer is always sent as its own separate
+        # message below instead of folded into this edit, keeping the edit
+        # itself within the 4096-char limit regardless of answer length.
+        body_text = _build_contact_body_text(completed_contact, user)
+        completed_footer = _build_contact_footer_text(completed_contact, completed=True)
+        combined = f"{body_text}\n\n{completed_footer}"
+        edit_text = combined if len(combined) <= TELEGRAM_MESSAGE_LIMIT else completed_footer
+
         try:
-            await message.bot.edit_message_text(
-                chat_id=notify_chat_id,
-                message_id=notify_message_id,
-                text=_build_notification_text(completed_contact, user, admin_answer=admin_answer),
+            await safe_edit_message_text(
+                message.bot, chat_id=notify_chat_id, message_id=notify_message_id, text=edit_text
             )
         except Exception:
             # Purely cosmetic (the reply was already sent and saved) -- never
@@ -263,6 +335,15 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
             logger.exception(
                 "Failed to update admin contact notification message for contact %s", contact_id
             )
+
+        try:
+            await send_long_message(
+                message.bot,
+                notify_chat_id,
+                _build_answer_followup_text(completed_contact, admin_answer),
+            )
+        except Exception:
+            logger.exception("Failed to send answer follow-up message for admin contact %s", contact_id)
 
 
 @router.message(AdminContactReplyStates.waiting_for_reply)
@@ -281,9 +362,14 @@ def _parse_contact_id(callback_data: str | None) -> int | None:
         return None
 
 
-def _build_notification_text(
-    contact: AdminContact, user: User | None, *, admin_answer: str | None = None
-) -> str:
+def _build_contact_body_text(contact: AdminContact, user: User | None) -> str:
+    """Everything about the admin-contact message except the timestamp/status footer.
+
+    Split out from the old single ``_build_notification_text`` so it can be
+    sent on its own (see ``notify_admins_new_contact``) when the combined
+    message would exceed Telegram's 4096-char limit. This part never changes
+    once the message is created, so it's reused as-is for the completion edit.
+    """
     lines = [
         "👨‍💼 <b>АДМИН БИЛАН БОҒЛАНИШ</b>",
         "",
@@ -295,11 +381,25 @@ def _build_notification_text(
         "",
         "💬 <b>Хабар:</b>",
         html.escape(contact.message_text),
-        "",
-        f"🕐 <b>Сана ва вақт:</b> {format_tashkent(contact.created_at)}",
     ]
-
-    if admin_answer is not None:
-        lines += ["", "💬 <b>Админ жавоби:</b>", html.escape(admin_answer)]
-
     return "\n".join(lines)
+
+
+def _build_contact_footer_text(contact: AdminContact, *, completed: bool) -> str:
+    """The short timestamp/status line -- always well within the 4096 limit."""
+    status_emoji = "🟢" if completed else "🟡"
+    status_label = "COMPLETED" if completed else "NEW"
+    lines = [
+        f"🕐 <b>Сана ва вақт:</b> {format_tashkent(contact.created_at)}",
+        "",
+        f"{status_emoji} <b>Ҳолат:</b> {status_label}",
+    ]
+    return "\n".join(lines)
+
+
+def _build_answer_followup_text(contact: AdminContact, admin_answer: str) -> str:
+    """The admin's own answer, shown back to them as a separate confirmation message."""
+    return (
+        f"💬 <b>Жавоб юборилди</b> (Мурожаат {html.escape(contact.contact_number)}):\n\n"
+        f"{html.escape(admin_answer)}"
+    )

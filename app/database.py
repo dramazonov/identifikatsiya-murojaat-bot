@@ -1,12 +1,39 @@
 from __future__ import annotations
 
+import os
+
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-DATABASE_URL = "sqlite+aiosqlite:///./bot.db"
+# BOT_DATABASE_URL lets tests (see tests/conftest.py) point the app at an
+# isolated database instead of the real ./bot.db -- unset in normal/production
+# use, so the default below is unchanged from before this override existed.
+DATABASE_URL = os.getenv("BOT_DATABASE_URL", "sqlite+aiosqlite:///./bot.db")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:
+    """Apply per-connection SQLite pragmas for concurrency (MVP audit HIGH #4).
+
+    ``journal_mode=WAL`` lets readers and a writer work concurrently instead
+    of SQLite's default rollback-journal mode, where a write blocks readers.
+    ``busy_timeout`` makes a writer that finds the database briefly locked by
+    another connection *wait* (up to 5s) and retry internally instead of
+    immediately raising ``database is locked`` -- both only reduce lock
+    contention under concurrent access, neither touches existing data or the
+    schema. Runs on every new DBAPI connection (SQLAlchemy's "connect" event)
+    because ``busy_timeout`` is a per-connection setting; ``journal_mode=WAL``
+    is a per-database-file setting that only needs to take effect once, but
+    re-issuing it on each connect is a harmless no-op after that.
+    """
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
 
 
 class Base(DeclarativeBase):

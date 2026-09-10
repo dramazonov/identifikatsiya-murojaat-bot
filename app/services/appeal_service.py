@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.database import async_session
 from app.models import Appeal, User
@@ -67,25 +67,37 @@ async def get_appeal_by_id(appeal_id: int) -> Appeal | None:
         return result.scalar_one_or_none()
 
 
-async def set_appeal_in_progress(appeal_id: int, admin_id: int) -> Appeal | None:
-    """Mark an appeal as being handled by an admin.
+async def claim_appeal(appeal_id: int, admin_id: int) -> tuple[Appeal | None, bool]:
+    """Atomically mark an appeal as being handled by ``admin_id`` -- first claim wins.
 
-    Sets status=IN_PROGRESS and records which admin picked it up. Returns None
-    if no appeal with this id exists (caller should treat that as "not found").
+    MVP audit CRITICAL #2 / instruction #5: two admins clicking "Жавоб бериш"
+    on the same appeal at nearly the same time must not both end up "handling"
+    it (the previous unconditional UPDATE let the second click silently
+    overwrite the first admin's claim -- last-write-wins). This does the claim
+    as a single conditional ``UPDATE ... WHERE status = 'NEW'``: only the
+    request that actually flips the row from NEW to IN_PROGRESS "wins"; SQLite
+    serializes concurrent writers at the database level, so this is safe even
+    under real concurrent calls, not just sequential ones.
+
+    Returns ``(appeal, claimed)``:
+    - ``(None, False)`` -- no appeal with this id exists.
+    - ``(appeal, True)`` -- this call claimed it just now (status was NEW).
+    - ``(appeal, False)`` -- appeal exists but was already claimed (by this
+      same admin on a redelivered Telegram update, or by a different one) --
+      ``appeal.admin_id`` tells the caller who. No write happened.
     """
     async with async_session() as session:
         async with session.begin():
-            result = await session.execute(select(Appeal).where(Appeal.id == appeal_id))
-            appeal = result.scalar_one_or_none()
+            result = await session.execute(
+                update(Appeal)
+                .where(Appeal.id == appeal_id, Appeal.status == "NEW")
+                .values(status="IN_PROGRESS", admin_id=admin_id, updated_at=utcnow())
+            )
+            claimed = result.rowcount > 0
 
-            if appeal is None:
-                return None
+            appeal = await session.get(Appeal, appeal_id)
 
-            appeal.status = "IN_PROGRESS"
-            appeal.admin_id = admin_id
-            appeal.updated_at = utcnow()
-
-        return appeal
+        return appeal, claimed
 
 
 async def complete_appeal(appeal_id: int, admin_id: int, admin_answer: str) -> Appeal | None:
