@@ -18,6 +18,7 @@ from app.keyboards import (
     faq_categories_keyboard,
     faq_questions_keyboard,
     main_menu_keyboard,
+    remove_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,13 @@ async def open_faq(message: Message, state: FSMContext) -> None:
     # Reachable from any FSM state (registered before start.py's state
     # catch-alls) -- treat it as leaving whatever flow the user was in.
     await state.clear()
+
+    # The main menu's ReplyKeyboard has to be explicitly retracted (Telegram
+    # only clears it on a message carrying ReplyKeyboardRemove -- see
+    # app.handlers.start._finish_registration for the same pattern) before
+    # the FAQ's own InlineKeyboard is shown; a single message can't carry
+    # both, so this takes two messages.
+    await message.answer(MENU_FAQ, reply_markup=remove_keyboard())
     await message.answer(FAQ_INTRO_TEXT, reply_markup=faq_categories_keyboard())
 
 

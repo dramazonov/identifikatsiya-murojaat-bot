@@ -124,11 +124,14 @@ async def menu_start_appeal(message: Message, state: FSMContext) -> None:
         # Already registered: go straight to composing the appeal, no need
         # to re-ask Ф.И.Ш./phone/region/district.
         await state.set_state(Registration.waiting_for_appeal)
-        await message.answer(ASK_APPEAL_TEXT)
+        # The main menu's ReplyKeyboard must not linger while composing --
+        # see remove_keyboard()'s other callers for why this needs an
+        # explicit ReplyKeyboardRemove rather than just omitting reply_markup.
+        await message.answer(ASK_APPEAL_TEXT, reply_markup=remove_keyboard())
         return
 
     await state.set_state(Registration.waiting_for_full_name)
-    await message.answer(WELCOME_TEXT)
+    await message.answer(WELCOME_TEXT, reply_markup=remove_keyboard())
 
 
 @router.message(F.text == MENU_SUGGESTION)
@@ -142,12 +145,15 @@ async def menu_start_suggestion(message: Message, state: FSMContext) -> None:
         # Already registered: go straight to composing the suggestion, no need
         # to re-ask Ф.И.Ш./phone/region/district.
         await state.set_state(SuggestionStates.waiting_for_suggestion)
-        await message.answer(ASK_SUGGESTION_TEXT)
+        # The main menu's ReplyKeyboard must not linger while composing --
+        # see remove_keyboard()'s other callers for why this needs an
+        # explicit ReplyKeyboardRemove rather than just omitting reply_markup.
+        await message.answer(ASK_SUGGESTION_TEXT, reply_markup=remove_keyboard())
         return
 
     await state.update_data(intent=INTENT_SUGGESTION)
     await state.set_state(Registration.waiting_for_full_name)
-    await message.answer(WELCOME_TEXT)
+    await message.answer(WELCOME_TEXT, reply_markup=remove_keyboard())
 
 
 @router.message(Registration.waiting_for_full_name, F.text)
@@ -277,22 +283,25 @@ async def process_district_selected(callback: CallbackQuery, state: FSMContext) 
         await callback.answer(CALLBACK_ERROR_TEXT, show_alert=True)
         return
 
-    # Route to whichever flow started registration (appeal composing by
-    # default, matching the pre-existing behavior of /start and the
-    # "📨 Мурожаат юбориш" button; suggestion composing when the user got here
-    # via "💡 Таклиф юбориш" -- see INTENT_SUGGESTION).
+    # Route to whichever flow started registration: suggestion composing when
+    # the user got here via "💡 Таклиф юбориш" (see INTENT_SUGGESTION,
+    # unchanged). Otherwise -- a brand-new user finishing registration via
+    # /start, or via "📨 Мурожаат юбориш" before ever registering -- land on
+    # the main menu instead of auto-starting the appeal state; the user must
+    # press "📨 Мурожаат юбориш" again to actually begin composing an appeal.
     intent = data.get("intent", INTENT_APPEAL)
 
     if intent == INTENT_SUGGESTION:
         await state.set_state(SuggestionStates.waiting_for_suggestion)
-        next_prompt = ASK_SUGGESTION_TEXT
+        if callback.message is not None:
+            await callback.message.edit_text(LOCATION_SUCCESS_TEXT)
+            await callback.message.answer(ASK_SUGGESTION_TEXT)
     else:
-        await state.set_state(Registration.waiting_for_appeal)
-        next_prompt = ASK_APPEAL_TEXT
+        await state.clear()
+        if callback.message is not None:
+            await callback.message.edit_text(LOCATION_SUCCESS_TEXT)
+            await callback.message.answer(WELCOME_BACK_TEXT, reply_markup=main_menu_keyboard())
 
-    if callback.message is not None:
-        await callback.message.edit_text(LOCATION_SUCCESS_TEXT)
-        await callback.message.answer(next_prompt)
     await callback.answer()
 
 

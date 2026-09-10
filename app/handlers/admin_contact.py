@@ -13,6 +13,7 @@ from app.keyboards import (
     MENU_ADMIN_CONTACT,
     admin_contact_reply_keyboard,
     main_menu_keyboard,
+    remove_keyboard,
 )
 from app.models import AdminContact, User
 from app.services.admin_contact_service import (
@@ -136,7 +137,10 @@ async def menu_admin_contact(message: Message, state: FSMContext) -> None:
     # No registration required: a brand-new user can contact admins directly.
     await state.clear()
     await state.set_state(AdminContactStates.waiting_for_message)
-    await message.answer(ASK_MESSAGE_TEXT)
+    # The main menu's ReplyKeyboard must not linger while composing -- see
+    # remove_keyboard()'s other callers for why this needs an explicit
+    # ReplyKeyboardRemove rather than just omitting reply_markup.
+    await message.answer(ASK_MESSAGE_TEXT, reply_markup=remove_keyboard())
 
 
 @router.message(AdminContactStates.waiting_for_message, F.text)
