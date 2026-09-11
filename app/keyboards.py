@@ -9,16 +9,28 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.data.appeal_categories import APPEAL_CATEGORIES
 from app.data.documents import DOCUMENTS, get_document
 from app.data.faq import FAQ_CATEGORIES, get_category
 from app.data.regions import DISTRICTS, REGIONS
-from app.i18n import DEFAULT_LANGUAGE, LANGUAGE_LABELS, SUPPORTED_LANGUAGES, all_texts, t
+from app.i18n import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_LABELS,
+    SUPPORTED_LANGUAGES,
+    all_texts,
+    appeal_category_text,
+    t,
+)
 
 LANGUAGE_CALLBACK_PREFIX = "lang"
 CONTACT_BUTTON_TEXT = t("button.share_phone", DEFAULT_LANGUAGE)
 REGION_CALLBACK_PREFIX = "region"
 DISTRICT_CALLBACK_PREFIX = "district"
 APPEAL_REPLY_CALLBACK_PREFIX = "appeal_reply"
+APPEAL_CATEGORY_CALLBACK_PREFIX = "appeal_cat"
+APPEAL_ATTACHMENT_SKIP_CALLBACK = "appeal_attach_skip"
+APPEAL_CONFIRM_CALLBACK = "appeal_confirm"
+APPEAL_CANCEL_CALLBACK = "appeal_cancel"
 ADMIN_CONTACT_REPLY_CALLBACK_PREFIX = "admin_contact_reply"
 MY_APPEALS_CALLBACK_PREFIX = "myappeals"
 SETTINGS_CALLBACK_PREFIX = "settings"
@@ -95,6 +107,53 @@ def district_keyboard(region_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+
+def appeal_category_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for code in APPEAL_CATEGORIES:
+        builder.button(
+            text=appeal_category_text(code, language_code),
+            callback_data=f"{APPEAL_CATEGORY_CALLBACK_PREFIX}:{code}",
+        )
+    builder.adjust(1)
+    builder.row(
+        InlineKeyboardButton(
+            text=t("appeal.cancel", language_code), callback_data=APPEAL_CANCEL_CALLBACK
+        )
+    )
+    return builder.as_markup()
+
+
+def appeal_attachment_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=t("appeal.skip_attachment", language_code),
+            callback_data=APPEAL_ATTACHMENT_SKIP_CALLBACK,
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=t("appeal.cancel", language_code), callback_data=APPEAL_CANCEL_CALLBACK
+        )
+    )
+    return builder.as_markup()
+
+
+def appeal_confirmation_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=t("appeal.confirm", language_code), callback_data=APPEAL_CONFIRM_CALLBACK
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=t("appeal.cancel", language_code), callback_data=APPEAL_CANCEL_CALLBACK
+        )
+    )
+    return builder.as_markup()
+
 def admin_reply_keyboard(appeal_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
@@ -139,6 +198,7 @@ def my_appeals_keyboard(
     total_pages: int,
     language_code: str = DEFAULT_LANGUAGE,
     status_emoji=None,
+    status_text=None,
     detail_back_only: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -157,8 +217,10 @@ def my_appeals_keyboard(
 
     for appeal in appeals:
         emoji = status_emoji(appeal.status) if status_emoji else "📌"
+        label = status_text(appeal.status, language_code) if status_text else ""
+        suffix = f" — {label}" if label else ""
         builder.button(
-            text=f"{emoji} {appeal.appeal_number}",
+            text=f"{emoji} {appeal.appeal_number}{suffix}",
             callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:item:{appeal.id}",
         )
     builder.adjust(1)

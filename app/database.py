@@ -198,6 +198,28 @@ async def _migrate_appeals_table() -> None:
         if "delivery_error_code" not in existing_columns:
             await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN delivery_error_code VARCHAR(64)")
 
+        if "category_code" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN category_code VARCHAR(40)")
+        if "subject" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN subject VARCHAR(200)")
+        if "attachment_type" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_type VARCHAR(16)")
+        if "attachment_file_id" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_file_id VARCHAR(512)")
+        if "attachment_file_unique_id" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_file_unique_id VARCHAR(255)")
+        if "attachment_name" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_name VARCHAR(255)")
+        if "attachment_size" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_size BIGINT")
+
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_appeals_category_code ON appeals (category_code)"
+        )
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_appeals_status ON appeals (status)"
+        )
+
 
 async def _migrate_admin_contacts_table() -> None:
     """Add delivery bookkeeping columns to legacy SQLite admin_contacts."""

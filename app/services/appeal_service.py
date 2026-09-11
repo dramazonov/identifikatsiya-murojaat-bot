@@ -22,10 +22,22 @@ def generate_appeal_number(appeal_id: int) -> str:
     return f"{APPEAL_NUMBER_PREFIX}-{appeal_id:0{APPEAL_NUMBER_DIGITS}d}"
 
 
-async def create_appeal(telegram_id: int, appeal_text: str) -> Appeal:
+async def create_appeal(
+    telegram_id: int,
+    appeal_text: str,
+    *,
+    category_code: str | None = None,
+    subject: str | None = None,
+    attachment_type: str | None = None,
+    attachment_file_id: str | None = None,
+    attachment_file_unique_id: str | None = None,
+    attachment_name: str | None = None,
+    attachment_size: int | None = None,
+) -> Appeal:
     """Create a new appeal for the user identified by their Telegram id.
 
-    Raises ValueError if no user with this telegram_id exists.
+    Stage 22 metadata is keyword-only so every pre-Stage-22 caller remains
+    backward compatible. Raises ValueError if no matching user exists.
     """
     now = utcnow()
 
@@ -45,7 +57,14 @@ async def create_appeal(telegram_id: int, appeal_text: str) -> Appeal:
             appeal = Appeal(
                 appeal_number=generate_temporary_number(),
                 user_id=user.id,
+                category_code=category_code,
+                subject=subject,
                 appeal_text=appeal_text,
+                attachment_type=attachment_type,
+                attachment_file_id=attachment_file_id,
+                attachment_file_unique_id=attachment_file_unique_id,
+                attachment_name=attachment_name,
+                attachment_size=attachment_size,
                 status="NEW",
                 created_at=now,
                 updated_at=now,

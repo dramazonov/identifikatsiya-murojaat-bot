@@ -18,8 +18,15 @@ class Appeal(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     appeal_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    category_code: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    subject: Mapped[str | None] = mapped_column(String(200), nullable=True)
     appeal_text: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="NEW")
+    attachment_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    attachment_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attachment_file_unique_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="NEW", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

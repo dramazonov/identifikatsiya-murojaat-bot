@@ -67,9 +67,9 @@ async def validate():
     async with engine.connect() as connection:
         await connection.run_sync(inspect_schema)
         require((await connection.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one()
-                == "d7c2f4189a6e", "Unexpected baseline revision")
+                == "e13f7a2c9b41", "Unexpected baseline revision")
         require((await connection.exec_driver_sql("SHOW timezone")).scalar_one() == "UTC", "Non-UTC session")
-    print("PASS: revision d7c2f4189a6e, tables, indexes, unique constraints, foreign keys, schema and UTC")
+    print("PASS: revision e13f7a2c9b41, tables, indexes, unique constraints, foreign keys, schema and UTC")
     await validate_services()
 
 
@@ -129,14 +129,37 @@ async def validate_services(*, cleanup_tasks=None):
         print("PASS: create/update and concurrent user/profile/location writes")
 
         async def submit(i):
-            return (await create_appeal(ids[0], tag), await create_suggestion(ids[0], tag),
-                    await create_admin_contact(ids[2], tag, tag))
+            return (
+                await create_appeal(
+                    ids[0],
+                    tag,
+                    category_code="DATABASE",
+                    subject=f"Validation subject {i}",
+                    attachment_type="PDF",
+                    attachment_file_id=f"validation-file-{i}",
+                    attachment_file_unique_id=f"validation-unique-{i}",
+                    attachment_name=f"validation-{i}.pdf",
+                    attachment_size=1000 + i,
+                ),
+                await create_suggestion(ids[0], tag),
+                await create_admin_contact(ids[2], tag, tag),
+            )
         results = await settled(*(submit(i) for i in range(8)))
         require(observed == {Appeal, Suggestion, AdminContact}, "Missing INSERT coverage")
         for index, (model, column, prefix) in enumerate(models):
             rows = [r[index] for r in results]
             require(len({getattr(r, column) for r in rows}) == 8, "Duplicate public number")
             require(all(getattr(r, column) == f"{prefix}-{r.id:06d}" for r in rows), "Wrong public format")
+        require(
+            all(
+                row[0].category_code == "DATABASE"
+                and row[0].subject.startswith("Validation subject ")
+                and row[0].attachment_type == "PDF"
+                and row[0].attachment_file_id
+                for row in results
+            ),
+            "Stage 22 appeal metadata not persisted",
+        )
         for claim, row in [(claim_appeal, results[0][0]), (claim_admin_contact, results[0][2])]:
             claims = await settled(claim(row.id, 101), claim(row.id, 102))
             require(sum(won for _, won in claims) == 1, "Claim race")

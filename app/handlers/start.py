@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.data.regions import DISTRICTS, REGIONS
 from app.handlers.admin import notify_admins_new_appeal, notify_admins_new_suggestion
+from app.handlers.appeal_flow import start_appeal_submission
 from app.i18n import DEFAULT_LANGUAGE, normalize_language, t
 from app.keyboards import (
     LANGUAGE_CALLBACK_PREFIX,
@@ -103,6 +104,10 @@ async def _finish_registration_flow(
     language_code: str,
     intent: str | None = None,
 ) -> None:
+    if intent == INTENT_APPEAL:
+        await start_appeal_submission(message, state, language_code)
+        return
+
     if intent == INTENT_SUGGESTION:
         await state.set_state(SuggestionStates.waiting_for_suggestion)
         await message.answer(t("suggestion.ask", language_code), reply_markup=remove_keyboard())
@@ -175,9 +180,7 @@ async def menu_start_appeal(message: Message, state: FSMContext) -> None:
     language_code = await get_user_language(message.from_user.id)
     user = await get_user_by_telegram_id(message.from_user.id)
     if is_registration_complete(user):
-        await state.update_data(language_code=language_code)
-        await state.set_state(Registration.waiting_for_appeal)
-        await message.answer(t("appeal.ask", language_code), reply_markup=remove_keyboard())
+        await start_appeal_submission(message, state, language_code)
         return
 
     await _route_incomplete_registration(
@@ -383,8 +386,14 @@ async def process_district_invalid(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(Registration.waiting_for_appeal, F.text)
 async def process_appeal_text(message: Message, state: FSMContext) -> None:
+    """Legacy regression hook for the pre-Stage-22 direct-text path.
+
+    It is intentionally not registered as a router handler anymore. Stage 22
+    uses app.handlers.appeal_flow, but keeping this function preserves the
+    existing duplicate-delivery/lease regression tests around the low-level
+    create operation.
+    """
     language_code = await _language_for_user(message.from_user.id, state)
     appeal_text = message.text.strip()
     if not is_valid_appeal_text(appeal_text):
@@ -424,12 +433,6 @@ async def process_appeal_text(message: Message, state: FSMContext) -> None:
             await notify_admins_new_appeal(message.bot, appeal, appeal_user)
     except Exception:
         logger.exception("Failed to notify admins about appeal %s", appeal.appeal_number)
-
-
-@router.message(Registration.waiting_for_appeal)
-async def process_appeal_invalid(message: Message, state: FSMContext) -> None:
-    language_code = await _language_for_user(message.from_user.id, state)
-    await message.answer(t("appeal.invalid", language_code))
 
 
 @router.message(SuggestionStates.waiting_for_suggestion, F.text)

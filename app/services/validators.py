@@ -5,6 +5,8 @@ import re
 MIN_FULL_NAME_LENGTH = 5
 MIN_APPEAL_TEXT_LENGTH = 5
 MAX_APPEAL_TEXT_LENGTH = 4000
+MIN_APPEAL_SUBJECT_LENGTH = 3
+MAX_APPEAL_SUBJECT_LENGTH = 200
 MIN_SUGGESTION_TEXT_LENGTH = 5
 MAX_SUGGESTION_TEXT_LENGTH = 4000
 MIN_ADMIN_CONTACT_MESSAGE_LENGTH = 2
@@ -22,6 +24,12 @@ def is_valid_appeal_text(appeal_text: str) -> bool:
     """Appeal text must be between MIN_APPEAL_TEXT_LENGTH and MAX_APPEAL_TEXT_LENGTH characters."""
     length = len(appeal_text.strip())
     return MIN_APPEAL_TEXT_LENGTH <= length <= MAX_APPEAL_TEXT_LENGTH
+
+
+def is_valid_appeal_subject(subject: str) -> bool:
+    """Stage 22 appeal subject length validation."""
+    length = len(subject.strip())
+    return MIN_APPEAL_SUBJECT_LENGTH <= length <= MAX_APPEAL_SUBJECT_LENGTH
 
 
 def is_valid_suggestion_text(suggestion_text: str) -> bool:

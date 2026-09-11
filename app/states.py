@@ -12,6 +12,16 @@ class Registration(StatesGroup):
     waiting_for_appeal = State()
 
 
+class AppealSubmissionStates(StatesGroup):
+    """Citizen-side Stage 22 appeal submission workflow."""
+
+    waiting_for_category = State()
+    waiting_for_subject = State()
+    waiting_for_text = State()
+    waiting_for_attachment = State()
+    waiting_for_confirmation = State()
+
+
 class SuggestionStates(StatesGroup):
     waiting_for_suggestion = State()
 

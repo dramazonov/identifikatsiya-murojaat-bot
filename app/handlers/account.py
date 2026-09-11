@@ -7,7 +7,14 @@ from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.i18n import LANGUAGE_LABELS, SUPPORTED_LANGUAGES, normalize_language, t
+from app.i18n import (
+    LANGUAGE_LABELS,
+    SUPPORTED_LANGUAGES,
+    appeal_category_text,
+    appeal_status_text,
+    normalize_language,
+    t,
+)
 from app.keyboards import (
     MY_APPEALS_CALLBACK_PREFIX,
     SETTINGS_CALLBACK_PREFIX,
@@ -53,14 +60,8 @@ def _parse_non_negative_int(raw: str) -> int | None:
 
 
 def _status_text(status: str, language_code: str) -> str:
-    key = {
-        "NEW": "status.new",
-        "IN_PROGRESS": "status.in_progress",
-        "WAITING_FOR_USER": "status.waiting_for_user",
-        "COMPLETED": "status.completed",
-        "REJECTED": "status.rejected",
-    }.get(status)
-    return t(key, language_code) if key else status
+    # Never leak internal DB codes (NEW/COMPLETED/...) to citizens.
+    return appeal_status_text(status, language_code)
 
 
 def _status_emoji(status: str) -> str:
@@ -98,6 +99,7 @@ async def _appeals_page_payload(telegram_id: int, language_code: str, page: int)
         total_pages=total_pages,
         language_code=language_code,
         status_emoji=_status_emoji,
+        status_text=_status_text,
     )
     return text, keyboard
 
@@ -152,12 +154,19 @@ async def my_appeals_detail(callback: CallbackQuery) -> None:
         return
 
     answer = appeal.admin_answer or t("my_appeals.no_answer", language_code)
+    attachment_key = {
+        "PHOTO": "appeal.attachment.photo",
+        "PDF": "appeal.attachment.pdf",
+    }.get(appeal.attachment_type, "appeal.attachment.none")
     detail = t(
         "my_appeals.detail",
         language_code,
         appeal_number=appeal.appeal_number,
         created_at=format_tashkent(appeal.created_at),
         status=_status_text(appeal.status, language_code),
+        category=appeal_category_text(appeal.category_code, language_code),
+        subject=appeal.subject or "—",
+        attachment=t(attachment_key, language_code),
         appeal_text=appeal.appeal_text,
         admin_answer=answer,
     )

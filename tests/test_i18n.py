@@ -30,6 +30,11 @@ def test_stage21_account_and_status_translations_are_complete():
         "status.waiting_for_user",
         "status.completed",
         "status.rejected",
+        "status.unknown",
+        "appeal.category_prompt",
+        "appeal.subject_prompt",
+        "appeal.attachment_prompt",
+        "appeal.confirmation",
     )
     for key in keys:
         values = all_texts(key)

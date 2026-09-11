@@ -5,7 +5,7 @@ Run commands from the repository root. Both app/database.py and Alembic load
 to sqlite+aiosqlite:///./bot.db. PostgreSQL uses postgresql+asyncpg://...
 Never print credentials or replace the existing .env during migration work.
 
-Baseline revision: b9a1e47cb84b. Current single HEAD: d7c2f4189a6e.
+Baseline revision: b9a1e47cb84b. Current single HEAD: e13f7a2c9b41.
 Production databases previously at b9a1e47cb84b must run `alembic upgrade head`
 before deploying code that requires the Stage 17A/18A columns. Do not use stamp
 to skip this forward migration.

@@ -11,6 +11,7 @@ from aiogram.types import ErrorEvent, Update
 from app.config import ADMIN_IDS, BOT_TOKEN
 from app.database import init_db
 from app.handlers.admin import router as admin_router
+from app.handlers.appeal_flow import router as appeal_router
 from app.handlers.admin_contact import router as admin_contact_router
 from app.handlers.account import router as account_router
 from app.handlers.documents import router as documents_router
@@ -80,6 +81,7 @@ def build_dispatcher(storage=None, isolation=None):
     dp.include_router(documents_router)
     dp.include_router(admin_contact_router)
     dp.include_router(start_router)
+    dp.include_router(appeal_router)
     # Keep account_router after start_router so /start always wins even while
     # a settings FSM state (for example phone update) is active.
     dp.include_router(account_router)

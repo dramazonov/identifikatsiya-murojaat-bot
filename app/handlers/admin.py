@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.config import ADMIN_IDS
 from app.keyboards import APPEAL_REPLY_CALLBACK_PREFIX, admin_reply_keyboard
-from app.i18n import t
+from app.i18n import appeal_category_text, appeal_status_text, t
 from app.models import Appeal, Suggestion, User
 from app.services.appeal_service import claim_appeal, complete_appeal, get_appeal_by_id
 from app.services.datetime_utils import format_tashkent
@@ -87,6 +87,21 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
     keyboard = admin_reply_keyboard(appeal.id)
 
     for admin_id in ADMIN_IDS:
+        if appeal.attachment_file_id:
+            try:
+                caption = f"📎 {html.escape(appeal.appeal_number)} — мурожаат иловаси"
+                if appeal.attachment_type == "PHOTO":
+                    await bot.send_photo(admin_id, appeal.attachment_file_id, caption=caption)
+                elif appeal.attachment_type == "PDF":
+                    await bot.send_document(admin_id, appeal.attachment_file_id, caption=caption)
+            except Exception:
+                # Attachment delivery is best-effort. The textual appeal notification
+                # must still reach the admin even if Telegram rejects the media copy.
+                logger.exception(
+                    "Failed to send attachment to admin %s for appeal %s",
+                    admin_id,
+                    appeal.appeal_number,
+                )
         try:
             if len(full_text) <= TELEGRAM_MESSAGE_LIMIT:
                 await send_long_message(bot, admin_id, full_text, reply_markup=keyboard)
@@ -163,6 +178,26 @@ async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMConte
             except Exception:
                 logger.exception("Failed to clear stale reply button for appeal %s", appeal_id)
         return
+
+    # The database keeps stable English status codes, but citizens never see
+    # those internal values. Notify them with the label in their selected UI
+    # language (Uzbek users see "Ko‘rib chiqilmoqda" / "Кўриб чиқилмоқда").
+    if claimed:
+        try:
+            citizen = await get_user_by_id(appeal.user_id)
+            if citizen is not None:
+                await send_long_message(
+                    callback.bot,
+                    citizen.telegram_id,
+                    t(
+                        "appeal.status_changed",
+                        citizen.language_code,
+                        appeal_number=appeal.appeal_number,
+                        status=appeal_status_text("IN_PROGRESS", citizen.language_code),
+                    ),
+                )
+        except Exception:
+            logger.exception("Failed to notify citizen about IN_PROGRESS status for appeal %s", appeal_id)
 
     await state.set_state(AdminStates.waiting_for_reply)
     await state.update_data(
@@ -309,6 +344,9 @@ def _build_appeal_body_text(appeal: Appeal, user: User) -> str:
     message would exceed Telegram's 4096-char limit. This part never changes
     once the appeal is created, so it's reused as-is for the completion edit.
     """
+    attachment_label = {"PHOTO": "Фото", "PDF": "PDF ҳужжат"}.get(
+        appeal.attachment_type, "Йўқ"
+    )
     lines = [
         "🔔 <b>Янги мурожаат</b>",
         "",
@@ -321,6 +359,12 @@ def _build_appeal_body_text(appeal: Appeal, user: User) -> str:
         f"📍 <b>Вилоят:</b> {html.escape(user.region or '-')}",
         "",
         f"🏙 <b>Туман/шаҳар:</b> {html.escape(user.district or '-')}",
+        "",
+        f"🗂 <b>Йўналиш:</b> {html.escape(appeal_category_text(appeal.category_code, 'uz_cyrl'))}",
+        "",
+        f"📋 <b>Мавзу:</b> {html.escape(appeal.subject or '-')}",
+        "",
+        f"📎 <b>Илова:</b> {attachment_label}",
         "",
         "📝 <b>Мурожаат:</b>",
         html.escape(appeal.appeal_text),
@@ -335,8 +379,14 @@ def _build_appeal_footer_text(appeal: Appeal, *, completed: bool) -> str:
     body doesn't fit alongside it; always used as-is for the completion edit,
     since it never grows with the appeal/answer text.
     """
-    status_emoji = "🟢" if completed else "🟡"
-    status_label = "COMPLETED" if completed else "NEW"
+    status_emoji = {
+        "NEW": "🆕",
+        "IN_PROGRESS": "🟡",
+        "WAITING_FOR_USER": "⏳",
+        "COMPLETED": "✅",
+        "REJECTED": "⛔",
+    }.get(appeal.status, "📌")
+    status_label = appeal_status_text(appeal.status, "uz_cyrl")
     lines = [
         f"🕐 <b>Юборилган вақт:</b> {format_tashkent(appeal.created_at)}",
         "",
