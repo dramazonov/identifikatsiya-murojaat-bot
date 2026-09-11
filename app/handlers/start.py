@@ -19,7 +19,7 @@ from app.keyboards import (
     remove_keyboard,
 )
 from app.services.appeal_service import create_appeal
-from app.services.rate_limit import already_processed, is_rate_limited
+from app.services.shared_state import acquire_submission, finish_submission, is_rate_limited
 from app.services.suggestion_service import create_suggestion
 from app.services.user_service import (
     get_user_by_id,
@@ -327,7 +327,7 @@ async def process_appeal_text(message: Message, state: FSMContext) -> None:
         await message.answer(INVALID_APPEAL_TEXT)
         return
 
-    if is_rate_limited(
+    if await is_rate_limited(
         f"appeal_create:{message.from_user.id}",
         limit=RATE_LIMIT_MAX_SUBMISSIONS,
         window_seconds=RATE_LIMIT_WINDOW_SECONDS,
@@ -338,7 +338,9 @@ async def process_appeal_text(message: Message, state: FSMContext) -> None:
     # Idempotency (MVP audit instruction #4): guards against Telegram
     # redelivering the same update (message_id is unique per chat, so a
     # genuinely new message from the user is never mistaken for a duplicate).
-    if already_processed(f"appeal_create:{message.chat.id}:{message.message_id}"):
+    submission_key = f"appeal_create:{message.chat.id}:{message.message_id}"
+    submission_token = await acquire_submission(submission_key)
+    if submission_token is None:
         logger.info(
             "Ignoring duplicate delivery of message %s in chat %s (appeal create)",
             message.message_id,
@@ -352,10 +354,12 @@ async def process_appeal_text(message: Message, state: FSMContext) -> None:
             appeal_text=appeal_text,
         )
     except Exception:
+        await finish_submission(submission_key, submission_token, failed=True)
         logger.exception("Failed to save appeal for user %s", message.from_user.id)
         await message.answer(GENERIC_ERROR_TEXT)
         return
 
+    await finish_submission(submission_key, submission_token)
     await state.clear()
     await message.answer(
         APPEAL_SUCCESS_TEXT_TEMPLATE.format(appeal_number=appeal.appeal_number),
@@ -391,7 +395,7 @@ async def process_suggestion_text(message: Message, state: FSMContext) -> None:
         await message.answer(INVALID_SUGGESTION_TEXT)
         return
 
-    if is_rate_limited(
+    if await is_rate_limited(
         f"suggestion_create:{message.from_user.id}",
         limit=RATE_LIMIT_MAX_SUBMISSIONS,
         window_seconds=RATE_LIMIT_WINDOW_SECONDS,
@@ -402,7 +406,9 @@ async def process_suggestion_text(message: Message, state: FSMContext) -> None:
     # Idempotency (MVP audit instruction #4): guards against Telegram
     # redelivering the same update (message_id is unique per chat, so a
     # genuinely new message from the user is never mistaken for a duplicate).
-    if already_processed(f"suggestion_create:{message.chat.id}:{message.message_id}"):
+    submission_key = f"suggestion_create:{message.chat.id}:{message.message_id}"
+    submission_token = await acquire_submission(submission_key)
+    if submission_token is None:
         logger.info(
             "Ignoring duplicate delivery of message %s in chat %s (suggestion create)",
             message.message_id,
@@ -416,10 +422,12 @@ async def process_suggestion_text(message: Message, state: FSMContext) -> None:
             suggestion_text=suggestion_text,
         )
     except Exception:
+        await finish_submission(submission_key, submission_token, failed=True)
         logger.exception("Failed to save suggestion for user %s", message.from_user.id)
         await message.answer(GENERIC_ERROR_TEXT)
         return
 
+    await finish_submission(submission_key, submission_token)
     await state.clear()
     await message.answer(
         SUGGESTION_SUCCESS_TEXT_TEMPLATE.format(suggestion_number=suggestion.suggestion_number),

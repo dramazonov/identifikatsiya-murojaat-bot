@@ -4,8 +4,9 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from app.database_url import database_options, create_database_engine
 
 # DATABASE_URL is the single source of truth for which database/driver to use
 # (Stage 11 / instruction #7), read by both the app and alembic/env.py. Unset
@@ -29,12 +30,10 @@ def _connect_args_for(url: str) -> dict:
     ``now()`` reflects the session timezone, so without this a non-UTC server/
     session default would silently corrupt every server-generated timestamp.
     """
-    if url.startswith("postgresql"):
-        return {"server_settings": {"timezone": "UTC"}}
-    return {}
+    return database_options(url)[1]
 
 
-engine = create_async_engine(DATABASE_URL, echo=False, connect_args=_connect_args_for(DATABASE_URL))
+engine = create_database_engine(DATABASE_URL)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -82,6 +81,10 @@ async def init_db() -> None:
     # Register all tables even when invoked directly, outside app.main.
     import app.models  # noqa: F401
 
+    if engine.dialect.name != "sqlite" or os.getenv("BOT_MODE", "polling") == "webhook":
+        await verify_schema()
+        return
+
     async with engine.begin() as conn:
         # Creates the table (with the full current schema) if it does not exist yet.
         # If it already exists, create_all leaves it untouched -- existing data is preserved.
@@ -100,6 +103,20 @@ async def init_db() -> None:
     if engine.dialect.name == "sqlite":
         await _migrate_users_table()
         await _migrate_appeals_table()
+
+
+async def verify_schema() -> None:
+    """Read-only production startup gate; migrations belong to the release job."""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from pathlib import Path
+
+    cfg = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+    expected = set(ScriptDirectory.from_config(cfg).get_heads())
+    async with engine.connect() as conn:
+        result = await conn.exec_driver_sql("SELECT version_num FROM alembic_version")
+        if set(result.scalars()) != expected:
+            raise RuntimeError("Database revision mismatch; run the explicit migration job")
 
 
 async def _migrate_users_table() -> None:

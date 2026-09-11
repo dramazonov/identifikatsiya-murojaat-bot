@@ -5,9 +5,5 @@ python-dotenv==1.0.1
 tzdata==2026.3
 alembic==1.19.2
 
-# PostgreSQL driver for a future production DATABASE_URL
-# (postgresql+asyncpg://...) -- not required and not installed while
-# DATABASE_URL still points at SQLite (Stage 11: no PostgreSQL server has
-# been installed yet). Listed here so `pip install -r requirements.txt`
-# already covers it once one is provisioned.
 asyncpg==0.30.0
+redis==5.2.1

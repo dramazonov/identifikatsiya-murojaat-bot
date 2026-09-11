@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==9.1.1
+pytest-asyncio==1.4.0
+fakeredis[lua]==2.26.2
+PyYAML==6.0.2

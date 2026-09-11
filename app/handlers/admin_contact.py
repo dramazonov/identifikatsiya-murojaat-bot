@@ -23,7 +23,7 @@ from app.services.admin_contact_service import (
     get_admin_contact_by_id,
 )
 from app.services.datetime_utils import format_tashkent
-from app.services.rate_limit import already_processed, is_rate_limited
+from app.services.shared_state import acquire_submission, finish_submission, is_rate_limited
 from app.services.telegram_delivery import (
     TELEGRAM_MESSAGE_LIMIT,
     safe_edit_message_text,
@@ -151,7 +151,7 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
         await message.answer(INVALID_MESSAGE_TEXT)
         return
 
-    if is_rate_limited(
+    if await is_rate_limited(
         f"admin_contact_create:{message.from_user.id}",
         limit=RATE_LIMIT_MAX_SUBMISSIONS,
         window_seconds=RATE_LIMIT_WINDOW_SECONDS,
@@ -162,7 +162,9 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
     # Idempotency (MVP audit instruction #4): guards against Telegram
     # redelivering the same update (message_id is unique per chat, so a
     # genuinely new message from the user is never mistaken for a duplicate).
-    if already_processed(f"admin_contact_create:{message.chat.id}:{message.message_id}"):
+    submission_key = f"admin_contact_create:{message.chat.id}:{message.message_id}"
+    submission_token = await acquire_submission(submission_key)
+    if submission_token is None:
         logger.info(
             "Ignoring duplicate delivery of message %s in chat %s (admin contact create)",
             message.message_id,
@@ -177,10 +179,12 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
             message_text=message_text,
         )
     except Exception:
+        await finish_submission(submission_key, submission_token, failed=True)
         logger.exception("Failed to save admin contact message for user %s", message.from_user.id)
         await message.answer(GENERIC_ERROR_TEXT)
         return
 
+    await finish_submission(submission_key, submission_token)
     await state.clear()
     await message.answer(
         CONTACT_SUCCESS_TEXT_TEMPLATE.format(contact_number=contact.contact_number),

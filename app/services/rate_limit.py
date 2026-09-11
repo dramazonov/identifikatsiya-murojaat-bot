@@ -1,29 +1,10 @@
 from __future__ import annotations
 
-"""In-memory idempotency / rate-limiting backend for the MVP.
+"""Legacy synchronous memory helpers used by development and regression tests.
 
-Two related concerns are served by the small functions here:
-
-- **Idempotency** (:func:`already_processed`): Telegram's update delivery is
-  at-least-once -- if the bot process is slow or hiccups before an update is
-  fully handled, the *same* update (same ``message_id``/``callback_query.id``)
-  can be redelivered. Handlers that perform a non-idempotent write (creating
-  an appeal/suggestion/admin-contact row) guard against double-processing by
-  checking this first.
-- **Rate limiting** (:func:`is_rate_limited`): a simple fixed-window counter
-  per key (typically ``f"{action}:{telegram_id}"``), used to stop a single
-  user from firing off many submissions within a few seconds without
-  penalizing normal, occasional use.
-
-Both are process-local, in-memory, and therefore correct only for a single
-bot process (today's MVP -- see app/database.py's WAL/busy_timeout comment
-and the audit's "Production arxitektura" section for the same caveat applied
-to SQLite). Every call site goes through the two functions below rather than
-touching ``_seen_keys``/``_hit_windows`` directly, so that when the bot moves
-to a multi-worker/webhook deployment, swapping this module's internals for a
-Redis-backed implementation (``SET key val NX PX ttl`` for
-``already_processed``; ``INCR``/``EXPIRE`` or a sorted set for
-``is_rate_limited``) needs no changes anywhere else in the codebase.
+Production handlers use shared_state's asynchronous Redis-capable API. This
+module's rate limiter is its no-Redis fallback; already_processed is retained
+for compatibility with existing callers and tests.
 """
 
 import time

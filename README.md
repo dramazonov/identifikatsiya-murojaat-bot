@@ -51,3 +51,15 @@ app/
 ## Implemented
 
 - `/start` — replies with a welcome message.
+
+## Production preparation
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the reviewed VPS workflow and runtime
+limitations. Production code is prepared; real PostgreSQL/Redis, Docker and
+HTTPS validation are still required on the VPS before cutover.
+
+- Development: BOT_MODE=polling (default), SQLite, optional Redis.
+- Production: BOT_MODE=webhook, PostgreSQL + Redis, explicit Alembic migration
+  job, aiohttp webhook server and Caddy HTTPS. Startup never registers a webhook.
+- Template: .env.production.example; keep the real server env outside the repo.
+- Tests: install requirements-dev.txt; run py -m compileall -q app and py -m pytest -q.

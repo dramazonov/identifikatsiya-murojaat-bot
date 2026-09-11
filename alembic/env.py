@@ -26,10 +26,10 @@ from logging.config import fileConfig
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from app.database_url import database_options, create_database_engine
 
 from alembic import context
-from app.database import Base, _connect_args_for  # also loads .env, without overriding the environment
+from app.database import Base  # also loads .env, without overriding the environment
 
 # This is the Alembic Config object, which provides access to the values
 # within the .ini file in use.
@@ -43,8 +43,11 @@ if config.config_file_name is not None:
 # DATABASE_URL overrides whatever static placeholder sits in alembic.ini
 # (instruction #7) -- read at run time, not import time, so tests can
 # monkeypatch it per-call (see tests/test_alembic_baseline.py).
+_normalized_url, _connect_args = database_options(
+    os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db")
+)
 config.set_main_option(
-    "sqlalchemy.url", os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db").replace("%", "%%")
+    "sqlalchemy.url", _normalized_url.render_as_string(hide_password=False).replace("%", "%%")
 )
 
 # Import every model so it registers its table on Base.metadata before
@@ -102,11 +105,9 @@ async def run_async_migrations() -> None:
     """In this scenario we need to create an AsyncEngine and associate a
     connection with the context.
     """
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+    connectable = create_database_engine(
+        os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bot.db"),
         poolclass=pool.NullPool,
-        connect_args=_connect_args_for(config.get_main_option("sqlalchemy.url")),
     )
 
     async with connectable.connect() as connection:
@@ -117,7 +118,11 @@ async def run_async_migrations() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
-    asyncio.run(run_async_migrations())
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        do_run_migrations(connection)
+    else:
+        asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():

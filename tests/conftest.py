@@ -21,6 +21,9 @@ _test_db_dir = tempfile.mkdtemp(prefix="bot_test_db_")
 _test_db_path = os.path.join(_test_db_dir, "test_bot.db").replace("\\", "/")
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_test_db_path}"
 
+os.environ["REDIS_URL"] = ""
+os.environ["BOT_MODE"] = "polling"
+
 import pytest_asyncio  # noqa: E402  (must follow the isolated DATABASE_URL above)
 
 

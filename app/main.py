@@ -72,33 +72,85 @@ async def global_error_handler(event: ErrorEvent, bot: Bot) -> bool:
     return True
 
 
-async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is not set. Please configure it in .env")
-
-    if not ADMIN_IDS:
-        logger.warning("ADMIN_IDS is empty. No admin will receive appeal notifications.")
-
-    await init_db()
-
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
+def build_dispatcher(storage=None, isolation=None):
+    dp = Dispatcher(storage=storage, events_isolation=isolation)
     dp.errors.register(global_error_handler)
-    # faq_router, documents_router and admin_contact_router are included
-    # before start_router so their main-menu buttons take priority over
-    # start_router's per-state catch-all handlers, letting the user reach
-    # them from any point in the registration flow.
     dp.include_router(faq_router)
     dp.include_router(documents_router)
     dp.include_router(admin_contact_router)
     dp.include_router(start_router)
     dp.include_router(admin_router)
+    return dp
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+
+def runtime_components(settings):
+    from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
+    from aiogram.fsm.storage.redis import RedisStorage, RedisEventIsolation
+    from aiogram.fsm.storage.base import DefaultKeyBuilder
+    from redis.asyncio import Redis
+    from app.services import shared_state
+
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    namespace = f"identifikatsiya:{bot.id}"
+    redis = Redis.from_url(settings.redis_url, socket_connect_timeout=3, socket_timeout=3) if settings.redis_url else None
+    shared_state.configure(redis, namespace)
+    if redis is None:
+        storage, isolation = MemoryStorage(), SimpleEventIsolation()
+    else:
+        keys = DefaultKeyBuilder(prefix=f"{namespace}:fsm", with_bot_id=True)
+        storage = RedisStorage(redis, key_builder=keys, state_ttl=86400, data_ttl=86400)
+        isolation = RedisEventIsolation(redis, key_builder=keys, lock_kwargs={"timeout": 300})
+    return bot, build_dispatcher(storage, isolation), redis
+
+
+async def poll(settings):
+    from app.database import engine
+    bot, dp, redis = runtime_components(settings)
+    try:
+        await init_db()
+        if redis is not None:
+            await redis.ping()
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    finally:
+        await dp.storage.close()
+        await dp.fsm.events_isolation.close()
+        await bot.session.close()
+        await engine.dispose()
+
+
+async def webhook_app(settings):
+    from app.database import engine, verify_schema
+    from app.http_server import create_http_app
+    bot, dp, redis = runtime_components(settings)
+
+    async def cleanup():
+        await dp.storage.close()
+        await dp.fsm.events_isolation.close()
+        await bot.session.close()
+        await engine.dispose()
+
+    return create_http_app(settings, dp, bot, db_check=verify_schema,
+                           redis_check=redis.ping, cleanup=cleanup)
+
+
+def main():
+    from aiohttp import web
+    from app.database import DATABASE_URL
+    from app.runtime import Settings
+    logging.basicConfig(level=logging.INFO)
+    settings = Settings.from_env()
+    settings.validate(DATABASE_URL)
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not configured")
+    if not ADMIN_IDS:
+        logger.warning("ADMIN_IDS is empty. No admin will receive notifications.")
+    if settings.mode == "polling":
+        asyncio.run(poll(settings))
+    else:
+        web.run_app(webhook_app(settings), host=settings.host, port=settings.port,
+                    access_log=None, print=None)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
