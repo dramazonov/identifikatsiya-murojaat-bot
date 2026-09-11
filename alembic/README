@@ -1,0 +1,43 @@
+Database migrations
+===================
+Run commands from the repository root. Both app/database.py and Alembic load
+.env without overriding process environment variables. DATABASE_URL defaults
+to sqlite+aiosqlite:///./bot.db. PostgreSQL uses postgresql+asyncpg://...
+Never print credentials or replace the existing .env during migration work.
+
+Current baseline and single HEAD: b9a1e47cb84b.
+The real bot.db was already stamped when audited on 2026-09-11. Do not stamp
+it again. No migration was executed against it during this audit.
+
+Fresh EMPTY database only:
+  py -m alembic upgrade head
+This creates the four application tables, indexes, foreign keys and version.
+Application startup still uses create_all and retains the old additive SQLite
+column patches for legacy MVP databases. Startup does not stamp or run Alembic.
+For production, migrate explicitly before starting application workers.
+
+Existing populated, UNSTAMPED SQLite database:
+1. Open in read-only mode; audit schema, indexes, counts, identifiers, duplicate
+   keys, orphan references, integrity_check and foreign_key_check.
+2. Verify its schema matches the baseline. stamp does NOT validate schema.
+3. Use sqlite3.Connection.backup to a NEW timestamped file. A raw copy of a
+   running WAL database can omit committed WAL data. Verify the backup exists,
+   opens cleanly, and has matching application contents.
+4. Only after those checks, with DATABASE_URL explicitly targeting that DB:
+     py -m alembic stamp b9a1e47cb84b
+5. Compare complete application rows, identifiers and schema before/after.
+   Only alembic_version and its index should be added. Account for independent
+   live writes if any; never undo them merely to force an audit comparison.
+Do not apply the baseline upgrade to existing unstamped tables. Never run
+baseline downgrade on a populated database: it drops application tables.
+
+Future changes: generate/review migrations against a disposable database,
+test upgrade and restore paths there, back up production, then apply the
+reviewed forward revision in a controlled maintenance workflow. SQLite batch
+alterations may rebuild tables; they require explicit review. Keep legacy
+SQLite patches until old database compatibility has been independently proven.
+
+Validation: py -m pytest -q uses temporary SQLite files even if the parent
+process has DATABASE_URL set. Baseline schema comparison, metadata-only stamping,
+percent-containing URLs and PostgreSQL offline DDL are tested. Offline SQL is
+not a substitute for integration tests on a real PostgreSQL server.

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import select, update
 
 from app.database import async_session
 from app.models import Appeal, User
 from app.services.datetime_utils import utcnow
+from app.services.temporary_number import generate_temporary_number
 
 APPEAL_NUMBER_PREFIX = "MUR"
 APPEAL_NUMBER_DIGITS = 6
@@ -39,12 +38,12 @@ async def create_appeal(telegram_id: int, appeal_text: str) -> Appeal:
                 raise ValueError(f"User with telegram_id={telegram_id} not found")
 
             # appeal_number is NOT NULL + UNIQUE, so it can't be left empty until
-            # the row's id is known. Insert with a globally-unique placeholder
+            # the row's id is known. Insert with a random 20-character placeholder
             # first, then flush to get the autoincrement id, then overwrite it
             # with the final MUR-XXXXXX number -- avoiding any race window where
             # two concurrent inserts could compute and collide on the same number.
             appeal = Appeal(
-                appeal_number=f"TMP-{uuid.uuid4().hex}",
+                appeal_number=generate_temporary_number(),
                 user_id=user.id,
                 appeal_text=appeal_text,
                 status="NEW",

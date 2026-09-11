@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import select, update
 
 from app.database import async_session
-from app.models import AdminContact, User
+from app.models import AdminContact
 from app.services.datetime_utils import utcnow
+from app.services.temporary_number import generate_temporary_number
+from app.services.user_service import get_or_create_user_id
 
 CONTACT_NUMBER_PREFIX = "ADM"
 CONTACT_NUMBER_DIGITS = 6
@@ -45,23 +45,17 @@ async def create_admin_contact(
 
     async with async_session() as session:
         async with session.begin():
-            result = await session.execute(select(User).where(User.telegram_id == telegram_id))
-            user = result.scalar_one_or_none()
-
-            if user is None:
-                user = User(telegram_id=telegram_id, telegram_username=telegram_username)
-                session.add(user)
-                await session.flush()  # assigns user.id
+            user_id = await get_or_create_user_id(session, telegram_id, telegram_username)
 
             # contact_number is NOT NULL + UNIQUE, so it can't be left empty
-            # until the row's id is known. Insert with a globally-unique
+            # until the row's id is known. Insert with a random 20-character
             # placeholder first, then flush to get the autoincrement id, then
             # overwrite it with the final ADM-XXXXXX number -- avoiding any
             # race window where two concurrent inserts could compute and
             # collide on the same number.
             contact = AdminContact(
-                contact_number=f"TMP-{uuid.uuid4().hex}",
-                user_id=user.id,
+                contact_number=generate_temporary_number(),
+                user_id=user_id,
                 message_text=message_text,
                 status="NEW",
                 created_at=now,
