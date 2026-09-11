@@ -8,10 +8,10 @@ from app.keyboards import appeal_category_keyboard, appeal_confirmation_keyboard
 from app.models import Appeal
 from app.services.appeal_service import create_appeal
 from app.services.user_service import save_user
-from app.services.validators import is_valid_appeal_subject
+from app.states import AppealSubmissionStates
 
 
-def test_stage22_categories_have_four_language_labels_and_callbacks():
+def test_categories_have_four_language_labels_and_callbacks():
     assert len(APPEAL_CATEGORIES) == 8
     for language in SUPPORTED_LANGUAGES:
         keyboard = appeal_category_keyboard(language)
@@ -37,26 +37,34 @@ def test_confirmation_keyboard_has_confirm_and_cancel():
     assert callbacks == ["appeal_confirm", "appeal_cancel"]
 
 
-def test_subject_validation_boundaries():
-    assert not is_valid_appeal_subject("ab")
-    assert is_valid_appeal_subject("abc")
-    assert is_valid_appeal_subject("x" * 200)
-    assert not is_valid_appeal_subject("x" * 201)
+def test_stage24_flow_has_no_subject_state_and_pdf_only_prompt():
+    assert not hasattr(AppealSubmissionStates, "waiting_for_subject")
+    prompt = t("appeal.attachment_prompt", "uz_latn").lower()
+    assert "pdf" in prompt
+    assert "foto" not in prompt
+    confirmation = t(
+        "appeal.confirmation",
+        "uz_latn",
+        category="Elektron baza",
+        attachment="Yo‘q",
+        appeal_text="Test murojaat",
+    )
+    assert "Mavzu" not in confirmation
+    assert "Test murojaat" in confirmation
 
 
-async def test_create_appeal_persists_stage22_metadata():
+async def test_create_appeal_persists_simplified_metadata():
     telegram_id = 970220001
     await save_user(
         telegram_id,
-        "stage22",
-        "Stage Twenty Two",
+        "stage24",
+        "Stage Twenty Four",
         "+998901234567",
     )
     appeal = await create_appeal(
         telegram_id,
-        "Detailed Stage 22 appeal body.",
+        "Detailed appeal body.",
         category_code="DATABASE",
-        subject="Elektron baza muammosi",
         attachment_type="PDF",
         attachment_file_id="telegram-file-id",
         attachment_file_unique_id="unique-file-id",
@@ -64,7 +72,7 @@ async def test_create_appeal_persists_stage22_metadata():
         attachment_size=12345,
     )
     assert appeal.category_code == "DATABASE"
-    assert appeal.subject == "Elektron baza muammosi"
+    assert appeal.subject is None
     assert appeal.attachment_type == "PDF"
     assert appeal.attachment_file_id == "telegram-file-id"
     assert appeal.attachment_file_unique_id == "unique-file-id"
@@ -112,7 +120,6 @@ def test_admin_footer_uses_uzbek_status_not_internal_code():
         appeal_text="test",
         status="NEW",
     )
-    # created_at is normally populated by DB; set explicitly for pure unit test.
     from datetime import datetime
     appeal.created_at = datetime(2026, 9, 11, 10, 0, 0)
     footer = _build_appeal_footer_text(appeal, completed=False)
@@ -121,10 +128,9 @@ def test_admin_footer_uses_uzbek_status_not_internal_code():
     assert "Ҳолат" in footer
 
 
-def test_stage22_translation_keys_are_complete():
+def test_stage24_translation_keys_are_complete():
     keys = (
         "appeal.category_prompt",
-        "appeal.subject_prompt",
         "appeal.text_prompt",
         "appeal.attachment_prompt",
         "appeal.attachment_invalid",

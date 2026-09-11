@@ -16,7 +16,6 @@ class AppealSubmissionStates(StatesGroup):
     """Citizen-side Stage 22 appeal submission workflow."""
 
     waiting_for_category = State()
-    waiting_for_subject = State()
     waiting_for_text = State()
     waiting_for_attachment = State()
     waiting_for_confirmation = State()
@@ -35,6 +34,8 @@ class AccountSettings(StatesGroup):
 class AdminStates(StatesGroup):
     waiting_for_reply = State()
     waiting_for_search = State()
+    waiting_for_admin_id = State()
+    waiting_for_admin_role = State()
 
 
 class AdminContactStates(StatesGroup):

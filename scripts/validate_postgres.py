@@ -67,9 +67,9 @@ async def validate():
     async with engine.connect() as connection:
         await connection.run_sync(inspect_schema)
         require((await connection.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one()
-                == "f4a2c8d17b63", "Unexpected baseline revision")
+                == "a8b4d6e21c90", "Unexpected baseline revision")
         require((await connection.exec_driver_sql("SHOW timezone")).scalar_one() == "UTC", "Non-UTC session")
-    print("PASS: revision f4a2c8d17b63, tables, indexes, unique constraints, foreign keys, schema and UTC")
+    print("PASS: revision a8b4d6e21c90, tables, indexes, unique constraints, foreign keys, schema and UTC")
     await validate_services()
 
 
@@ -134,7 +134,7 @@ async def validate_services(*, cleanup_tasks=None):
                     ids[0],
                     tag,
                     category_code="DATABASE",
-                    subject=f"Validation subject {i}",
+                    subject=None,
                     attachment_type="PDF",
                     attachment_file_id=f"validation-file-{i}",
                     attachment_file_unique_id=f"validation-unique-{i}",
@@ -153,12 +153,12 @@ async def validate_services(*, cleanup_tasks=None):
         require(
             all(
                 row[0].category_code == "DATABASE"
-                and row[0].subject.startswith("Validation subject ")
+                and row[0].subject is None
                 and row[0].attachment_type == "PDF"
                 and row[0].attachment_file_id
                 for row in results
             ),
-            "Stage 22 appeal metadata not persisted",
+            "Stage 24 appeal metadata not persisted",
         )
         for claim, row in [(claim_appeal, results[0][0]), (claim_admin_contact, results[0][2])]:
             claims = await settled(claim(row.id, 101), claim(row.id, 102))

@@ -66,8 +66,17 @@ HTTPS validation are still required on the VPS before cutover.
 
 ## Stage 23 — Admin workflow 2.0
 
-- Two admin roles: SUPERADMIN and ADMIN (`SUPERADMIN_IDS` + `ADMIN_IDS`).
+- Two admin roles: SUPERADMIN and ADMIN. `SUPERADMIN_IDS` is the immutable ROOT bootstrap; additional roles are managed from the bot.
 - New appeals are broadcast to every admin; the first reply click atomically claims the appeal for 15 minutes.
 - All other admin copies lose the reply button after a successful claim; cancel reopens the appeal.
 - Suggestions are delivered only to SUPERADMIN users and have a single one-time `Ko‘rib chiqildi` action.
 - `/admin` opens the role-aware admin panel with appeals, search and statistics; suggestion views are superadmin-only.
+
+## Stage 24 — Dynamic admins + simplified appeals
+
+- `SUPERADMIN_IDS` contains the immutable ROOT superadmin(s). A ROOT superadmin cannot be removed from Telegram.
+- `/admin` → `👥 Админлар` lets any superadmin add DB-managed SUPERADMIN or ADMIN accounts and remove DB-managed accounts.
+- SUPERADMIN users receive appeals and suggestions; ADMIN users receive appeals but never suggestion notifications or suggestion controls.
+- Removing a dynamic admin also releases their unfinished appeal/admin-contact claim so work is not stranded.
+- Citizen appeal flow is intentionally short: direction → appeal text → optional PDF → confirmation. No separate subject is requested.
+- New appeal submissions accept PDF only (up to 20 MB); old photo attachments remain displayable for historical records.

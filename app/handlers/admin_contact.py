@@ -7,7 +7,7 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.config import all_admin_ids, is_admin
+from app.services.admin_service import all_admin_ids, is_admin
 from app.i18n import t
 from app.keyboards import (
     ADMIN_CONTACT_REPLY_CALLBACK_PREFIX,
@@ -109,7 +109,8 @@ async def notify_admins_new_contact(bot: Bot, contact: AdminContact, user: User 
     limit -- see app.handlers.admin.notify_admins_new_appeal for the full
     rationale; the split-when-needed strategy here is identical.
     """
-    if not all_admin_ids():
+    admin_ids = await all_admin_ids()
+    if not admin_ids:
         return
 
     body_text = _build_contact_body_text(contact, user)
@@ -117,7 +118,7 @@ async def notify_admins_new_contact(bot: Bot, contact: AdminContact, user: User 
     full_text = f"{body_text}\n\n{footer_text}"
     keyboard = admin_contact_reply_keyboard(contact.id)
 
-    for admin_id in all_admin_ids():
+    for admin_id in admin_ids:
         try:
             if len(full_text) <= TELEGRAM_MESSAGE_LIMIT:
                 await send_long_message(bot, admin_id, full_text, reply_markup=keyboard)
@@ -210,7 +211,7 @@ async def process_admin_contact_message_invalid(message: Message) -> None:
 
 @router.callback_query(F.data.startswith(f"{ADMIN_CONTACT_REPLY_CALLBACK_PREFIX}:"))
 async def process_admin_contact_reply_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
+    if not await is_admin(callback.from_user.id):
         await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
         return
 
@@ -257,7 +258,7 @@ async def process_admin_contact_reply_callback(callback: CallbackQuery, state: F
 
 @router.message(AdminContactReplyStates.waiting_for_reply, F.text)
 async def process_admin_contact_reply_text(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id):
+    if not await is_admin(message.from_user.id):
         # Shouldn't normally happen (only admins are ever put into this state),
         # but never let a non-admin act on it.
         await state.clear()
@@ -369,7 +370,7 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
 
 @router.message(AdminContactReplyStates.waiting_for_reply)
 async def process_admin_contact_reply_invalid(message: Message) -> None:
-    if not is_admin(message.from_user.id):
+    if not await is_admin(message.from_user.id):
         return
     await message.answer(INVALID_REPLY_TEXT)
 

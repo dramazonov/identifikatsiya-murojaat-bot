@@ -19,7 +19,7 @@ async def check():
         assert (await c.exec_driver_sql('SELECT telegram_id FROM users')).scalars().all() == [12345]
         assert (await c.exec_driver_sql('PRAGMA foreign_key_check')).all() == []
         tables = set((await c.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")).scalars())
-        assert {'users', 'appeals', 'suggestions', 'admin_contacts'} <= tables
+        assert {'users', 'appeals', 'suggestions', 'admin_contacts', 'bot_admins'} <= tables
     await engine.dispose()
 asyncio.run(check())
 '''

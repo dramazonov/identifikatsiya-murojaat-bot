@@ -30,6 +30,8 @@ APPEAL_REPLY_CALLBACK_PREFIX = "appeal_reply"
 APPEAL_CANCEL_REPLY_CALLBACK_PREFIX = "appeal_cancel_reply"
 SUGGESTION_REVIEW_CALLBACK_PREFIX = "suggestion_review"
 ADMIN_PANEL_CALLBACK_PREFIX = "admin_panel"
+ADMIN_MANAGE_CALLBACK_PREFIX = "admin_manage"
+ADMIN_ROLE_CALLBACK_PREFIX = "admin_role"
 APPEAL_CATEGORY_CALLBACK_PREFIX = "appeal_cat"
 APPEAL_ATTACHMENT_SKIP_CALLBACK = "appeal_attach_skip"
 APPEAL_CONFIRM_CALLBACK = "appeal_confirm"
@@ -190,10 +192,43 @@ def admin_panel_keyboard(*, superadmin: bool) -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="📨 Мурожаатлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:appeals"))
     if superadmin:
         builder.row(InlineKeyboardButton(text="💡 Таклифлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:suggestions"))
+        builder.row(InlineKeyboardButton(text="👥 Админлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:admins"))
     builder.row(InlineKeyboardButton(text="🔎 Қидириш", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:search"))
     builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:stats"))
     return builder.as_markup()
 
+
+
+def admin_management_keyboard(entries) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="➕ Админ қўшиш", callback_data=f"{ADMIN_MANAGE_CALLBACK_PREFIX}:add")
+    )
+    for entry in entries:
+        if entry.removable:
+            role_icon = "👑" if entry.role == "SUPERADMIN" else "👤"
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"🗑 {role_icon} {entry.telegram_id}",
+                    callback_data=f"{ADMIN_MANAGE_CALLBACK_PREFIX}:remove:{entry.telegram_id}",
+                )
+            )
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Админ панель", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:home")
+    )
+    return builder.as_markup()
+
+
+def admin_role_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="👑 SUPERADMIN", callback_data=f"{ADMIN_ROLE_CALLBACK_PREFIX}:SUPERADMIN"),
+        InlineKeyboardButton(text="👤 ADMIN", callback_data=f"{ADMIN_ROLE_CALLBACK_PREFIX}:ADMIN"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Бекор қилиш", callback_data=f"{ADMIN_MANAGE_CALLBACK_PREFIX}:cancel")
+    )
+    return builder.as_markup()
 
 def admin_contact_reply_keyboard(contact_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()

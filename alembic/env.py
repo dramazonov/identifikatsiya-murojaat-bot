@@ -55,6 +55,7 @@ config.set_main_option(
 # app/main.py, which exists for exactly this reason.
 from app.models import (  # noqa: E402,F401
     AdminContact,
+    BotAdmin,
     Appeal,
     Suggestion,
     User,

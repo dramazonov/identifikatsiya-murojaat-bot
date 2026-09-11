@@ -27,5 +27,5 @@ def test_image_excludes_local_secrets_and_template_is_empty():
     assert (ROOT / ".dockerignore").read_text().startswith("*\n")
     values = dict(line.split("=", 1) for line in (ROOT / ".env.production.example").read_text().splitlines()
                   if line and not line.startswith("#"))
-    for key in ("BOT_TOKEN", "POSTGRES_PASSWORD", "DATABASE_URL", "WEBHOOK_SECRET", "ADMIN_IDS"):
+    for key in ("BOT_TOKEN", "POSTGRES_PASSWORD", "DATABASE_URL", "WEBHOOK_SECRET", "ADMIN_IDS", "SUPERADMIN_IDS"):
         assert values[key] == ""

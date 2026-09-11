@@ -8,19 +8,35 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.config import SUPERADMIN_IDS, all_admin_ids, is_admin, is_superadmin
 from app.keyboards import (
     ADMIN_PANEL_CALLBACK_PREFIX,
+    ADMIN_MANAGE_CALLBACK_PREFIX,
+    ADMIN_ROLE_CALLBACK_PREFIX,
     APPEAL_CANCEL_REPLY_CALLBACK_PREFIX,
     APPEAL_REPLY_CALLBACK_PREFIX,
     SUGGESTION_REVIEW_CALLBACK_PREFIX,
     admin_cancel_reply_keyboard,
     admin_panel_keyboard,
+    admin_management_keyboard,
+    admin_role_keyboard,
     admin_reply_keyboard,
     suggestion_review_keyboard,
 )
 from app.i18n import appeal_category_text, appeal_status_text, t
 from app.models import Appeal, Suggestion, User
+from app.services.admin_service import (
+    ROLE_ADMIN,
+    ROLE_SUPERADMIN,
+    add_or_update_admin,
+    all_admin_ids,
+    all_superadmin_ids,
+    get_admin_role,
+    is_admin,
+    is_root_superadmin,
+    is_superadmin,
+    list_admin_entries,
+    remove_dynamic_admin,
+)
 from app.services.appeal_service import (
     admin_appeal_counts,
     claim_appeal,
@@ -98,7 +114,8 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
     the button is never lost and is always attached to a message that stays
     editable within the limit later (see process_admin_reply_text).
     """
-    if not all_admin_ids():
+    admin_ids = await all_admin_ids()
+    if not admin_ids:
         return
 
     body_text = _build_appeal_body_text(appeal, user)
@@ -106,7 +123,7 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
     full_text = f"{body_text}\n\n{footer_text}"
     keyboard = admin_reply_keyboard(appeal.id)
 
-    for admin_id in all_admin_ids():
+    for admin_id in admin_ids:
         if appeal.attachment_file_id:
             try:
                 caption = f"📎 {html.escape(appeal.appeal_number)} — мурожаат иловаси"
@@ -135,11 +152,12 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
 
 async def notify_admins_new_suggestion(bot: Bot, suggestion: Suggestion, user: User) -> None:
     """Stage 23: suggestions go only to SUPERADMIN users."""
-    if not SUPERADMIN_IDS:
+    superadmin_ids = await all_superadmin_ids()
+    if not superadmin_ids:
         return
     text = _build_suggestion_notification_text(suggestion, user)
     keyboard = suggestion_review_keyboard(suggestion.id)
-    for admin_id in SUPERADMIN_IDS:
+    for admin_id in superadmin_ids:
         try:
             sent = await send_long_message(bot, admin_id, text, reply_markup=keyboard)
             await remember_notification("suggestion", suggestion.id, admin_id, sent.chat.id, sent.message_id)
@@ -168,7 +186,7 @@ async def _set_appeal_buttons(bot: Bot, appeal_id: int, *, enabled: bool) -> Non
 
 
 async def _broadcast_admins(bot: Bot, text: str) -> None:
-    for admin_id in all_admin_ids():
+    for admin_id in await all_admin_ids():
         try:
             await send_long_message(bot, admin_id, text)
         except Exception:
@@ -176,7 +194,7 @@ async def _broadcast_admins(bot: Bot, text: str) -> None:
 
 
 async def _broadcast_superadmins(bot: Bot, text: str) -> None:
-    for admin_id in SUPERADMIN_IDS:
+    for admin_id in await all_superadmin_ids():
         try:
             await send_long_message(bot, admin_id, text)
         except Exception:
@@ -185,7 +203,7 @@ async def _broadcast_superadmins(bot: Bot, text: str) -> None:
 
 @router.callback_query(F.data.startswith(f"{APPEAL_REPLY_CALLBACK_PREFIX}:"))
 async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
+    if not await is_admin(callback.from_user.id):
         await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
         return
 
@@ -266,7 +284,7 @@ async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMConte
 
 @router.message(AdminStates.waiting_for_reply, F.text)
 async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id):
+    if not await is_admin(message.from_user.id):
         # Shouldn't normally happen (only admins are ever put into this state),
         # but never let a non-admin act on it.
         await state.clear()
@@ -390,7 +408,7 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data.startswith(f"{APPEAL_CANCEL_REPLY_CALLBACK_PREFIX}:"))
 async def process_appeal_cancel_reply(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
+    if not await is_admin(callback.from_user.id):
         await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
         return
     appeal_id = _parse_appeal_id(callback.data)
@@ -420,7 +438,7 @@ async def process_appeal_cancel_reply(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(F.data.startswith(f"{SUGGESTION_REVIEW_CALLBACK_PREFIX}:"))
 async def process_suggestion_review(callback: CallbackQuery) -> None:
-    if not is_superadmin(callback.from_user.id):
+    if not await is_superadmin(callback.from_user.id):
         await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
         return
     suggestion_id = _parse_appeal_id(callback.data)
@@ -470,26 +488,156 @@ async def process_suggestion_review(callback: CallbackQuery) -> None:
 
 @router.message(Command("admin"))
 async def admin_panel_command(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id):
+    if not await is_admin(message.from_user.id):
         await message.answer(NOT_ADMIN_TEXT)
         return
     await state.clear()
-    role = "SUPERADMIN" if is_superadmin(message.from_user.id) else "ADMIN"
+    role = await get_admin_role(message.from_user.id) or "ADMIN"
+    superadmin = role == ROLE_SUPERADMIN
     await message.answer(
         f"👨‍💼 <b>Админ панель</b>\n\nРоль: <b>{role}</b>",
-        reply_markup=admin_panel_keyboard(superadmin=is_superadmin(message.from_user.id)),
+        reply_markup=admin_panel_keyboard(superadmin=superadmin),
     )
+
+
+async def _send_admin_management(message: Message) -> None:
+    entries = await list_admin_entries()
+    lines = ["👥 <b>Админлар</b>", ""]
+    if not entries:
+        lines.append("Админлар топилмади.")
+    else:
+        for entry in entries:
+            if entry.source == "ROOT":
+                label = "👑 ROOT SUPERADMIN"
+            elif entry.role == ROLE_SUPERADMIN:
+                label = "👑 SUPERADMIN"
+            else:
+                label = "👤 ADMIN"
+            source = " (Render)" if entry.source in {"ROOT", "ENV"} else ""
+            lines.append(f"{label}: <code>{entry.telegram_id}</code>{source}")
+    lines.extend(["", "➕ Янги админ қўшиш ёки пастдаги динамик админни ўчириш мумкин."])
+    await message.answer("\n".join(lines), reply_markup=admin_management_keyboard(entries))
+
+
+@router.callback_query(F.data == f"{ADMIN_MANAGE_CALLBACK_PREFIX}:add")
+async def admin_manage_add(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await is_superadmin(callback.from_user.id):
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(AdminStates.waiting_for_admin_id)
+    if callback.message is not None:
+        await callback.message.answer("Янги админнинг Telegram ID рақамини киритинг:")
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_admin_id, F.text)
+async def admin_manage_id_received(message: Message, state: FSMContext) -> None:
+    if not await is_superadmin(message.from_user.id):
+        await state.clear()
+        await message.answer(NOT_ADMIN_TEXT)
+        return
+    raw = message.text.strip()
+    if not raw.isdigit() or len(raw) > 20 or int(raw) <= 0:
+        await message.answer("Telegram ID нотўғри. Фақат мусбат рақам киритинг.")
+        return
+    await state.update_data(target_admin_id=int(raw))
+    await state.set_state(AdminStates.waiting_for_admin_role)
+    await message.answer("Ролни танланг:", reply_markup=admin_role_keyboard())
+
+
+@router.callback_query(
+    AdminStates.waiting_for_admin_role,
+    F.data.startswith(f"{ADMIN_ROLE_CALLBACK_PREFIX}:"),
+)
+async def admin_manage_role_selected(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await is_superadmin(callback.from_user.id):
+        await state.clear()
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+    role = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+    if role not in {ROLE_SUPERADMIN, ROLE_ADMIN}:
+        await callback.answer("Роль нотўғри.", show_alert=True)
+        return
+    data = await state.get_data()
+    target_admin_id = data.get("target_admin_id")
+    if not isinstance(target_admin_id, int):
+        await state.clear()
+        await callback.answer("Telegram ID топилмади. Қайта уриниб кўринг.", show_alert=True)
+        return
+    try:
+        entry = await add_or_update_admin(target_admin_id, role, callback.from_user.id)
+    except ValueError as exc:
+        await state.clear()
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await state.clear()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"✅ <code>{entry.telegram_id}</code> — <b>{entry.role}</b> сифатида сақланди."
+        )
+        await _send_admin_management(callback.message)
+    try:
+        await send_long_message(
+            callback.bot,
+            entry.telegram_id,
+            f"👨‍💼 Сизга ботда <b>{entry.role}</b> ҳуқуқи берилди. /admin орқали панелни очишингиз мумкин.",
+        )
+    except Exception:
+        logger.info("Could not proactively notify new admin %s", entry.telegram_id)
+    await callback.answer("Сақланди.")
+
+
+@router.callback_query(F.data.startswith(f"{ADMIN_MANAGE_CALLBACK_PREFIX}:remove:"))
+async def admin_manage_remove(callback: CallbackQuery) -> None:
+    if not await is_superadmin(callback.from_user.id):
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+    try:
+        target_admin_id = int((callback.data or "").rsplit(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Telegram ID нотўғри.", show_alert=True)
+        return
+    removed = await remove_dynamic_admin(target_admin_id, callback.from_user.id)
+    if not removed:
+        await callback.answer("Бу админни бот орқали ўчириб бўлмайди.", show_alert=True)
+        return
+    if callback.message is not None:
+        await callback.message.answer(f"🗑 <code>{target_admin_id}</code> админлар рўйхатидан ўчирилди.")
+        await _send_admin_management(callback.message)
+    await callback.answer("Ўчирилди.")
+
+
+@router.callback_query(F.data == f"{ADMIN_MANAGE_CALLBACK_PREFIX}:cancel")
+async def admin_manage_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    if callback.message is not None and await is_superadmin(callback.from_user.id):
+        await _send_admin_management(callback.message)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith(f"{ADMIN_PANEL_CALLBACK_PREFIX}:"))
 async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    if not is_admin(callback.from_user.id):
+    if not await is_admin(callback.from_user.id):
         await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
         return
     action = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
-    if action == "stats":
+    if action == "home":
+        role = await get_admin_role(callback.from_user.id) or ROLE_ADMIN
+        if callback.message is not None:
+            await callback.message.answer(
+                f"👨‍💼 <b>Админ панель</b>\n\nРоль: <b>{role}</b>",
+                reply_markup=admin_panel_keyboard(superadmin=role == ROLE_SUPERADMIN),
+            )
+    elif action == "admins":
+        if not await is_superadmin(callback.from_user.id):
+            await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+            return
+        if callback.message is not None:
+            await _send_admin_management(callback.message)
+    elif action == "stats":
         appeals = await admin_appeal_counts()
-        suggestions = await suggestion_counts() if is_superadmin(callback.from_user.id) else {}
+        suggestions = await suggestion_counts() if await is_superadmin(callback.from_user.id) else {}
         text = (
             "📊 <b>Статистика</b>\n\n"
             f"🆕 Янги мурожаатлар: {appeals.get('NEW', 0)}\n"
@@ -497,7 +645,7 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
             f"✅ Якунланган: {appeals.get('COMPLETED', 0)}\n"
             f"❌ Рад этилган: {appeals.get('REJECTED', 0)}"
         )
-        if is_superadmin(callback.from_user.id):
+        if await is_superadmin(callback.from_user.id):
             text += f"\n\n💡 Янги таклифлар: {suggestions.get('NEW', 0)}\n☑️ Кўриб чиқилган: {suggestions.get('REVIEWED', 0)}"
         await callback.message.answer(text)
     elif action == "appeals":
@@ -512,7 +660,7 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
                     reply_markup=admin_reply_keyboard(appeal.id),
                 )
     elif action == "suggestions":
-        if not is_superadmin(callback.from_user.id):
+        if not await is_superadmin(callback.from_user.id):
             await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
             return
         rows = await list_suggestions(status="NEW", limit=10)
@@ -532,7 +680,7 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
 
 @router.message(AdminStates.waiting_for_search, F.text)
 async def admin_search_message(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id):
+    if not await is_admin(message.from_user.id):
         await state.clear()
         return
     appeal = await search_appeal_by_number(message.text.strip())
@@ -551,7 +699,7 @@ async def admin_search_message(message: Message, state: FSMContext) -> None:
 
 @router.message(AdminStates.waiting_for_reply)
 async def process_admin_reply_invalid(message: Message) -> None:
-    if not is_admin(message.from_user.id):
+    if not await is_admin(message.from_user.id):
         return
     await message.answer(INVALID_REPLY_TEXT)
 
@@ -590,8 +738,6 @@ def _build_appeal_body_text(appeal: Appeal, user: User) -> str:
         f"🏙 <b>Туман/шаҳар:</b> {html.escape(user.district or '-')}",
         "",
         f"🗂 <b>Йўналиш:</b> {html.escape(appeal_category_text(appeal.category_code, 'uz_cyrl'))}",
-        "",
-        f"📋 <b>Мавзу:</b> {html.escape(appeal.subject or '-')}",
         "",
         f"📎 <b>Илова:</b> {attachment_label}",
         "",

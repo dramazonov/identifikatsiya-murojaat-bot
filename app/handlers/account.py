@@ -165,7 +165,6 @@ async def my_appeals_detail(callback: CallbackQuery) -> None:
         created_at=format_tashkent(appeal.created_at),
         status=_status_text(appeal.status, language_code),
         category=appeal_category_text(appeal.category_code, language_code),
-        subject=appeal.subject or "—",
         attachment=t(attachment_key, language_code),
         appeal_text=appeal.appeal_text,
         admin_answer=answer,
