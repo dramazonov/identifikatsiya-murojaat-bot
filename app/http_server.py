@@ -28,7 +28,7 @@ def create_http_app(settings, dispatcher, bot, *, db_check, redis_check, cleanup
         await cleanup()
 
     app.router.add_get("/health", health)
-    SimpleRequestHandler(dispatcher, bot, handle_in_background=False,
+    SimpleRequestHandler(dispatcher, bot, handle_in_background=True,
                          secret_token=settings.secret).register(app, path=settings.path)
     app.on_startup.append(startup)
     setup_application(app, dispatcher, bot=bot)

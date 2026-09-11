@@ -86,6 +86,15 @@ async def test_webhook_secret_health_and_no_telegram_configuration():
     bot.set_webhook = AsyncMock()
     bot.delete_webhook = AsyncMock()
     dp = Dispatcher()
+    # With handle_in_background=True aiogram ACKs Telegram immediately and
+    # dispatches the raw update in a detached task via feed_raw_update().
+    background_called = asyncio.Event()
+
+    async def _feed_raw_update(*args, **kwargs):
+        background_called.set()
+        return None
+
+    dp.feed_raw_update = AsyncMock(side_effect=_feed_raw_update)
     dp.feed_webhook_update = AsyncMock(return_value=None)
     db, redis, cleanup = AsyncMock(), AsyncMock(), AsyncMock()
     app = create_http_app(settings, dp, bot, db_check=db, redis_check=redis, cleanup=cleanup)
@@ -99,7 +108,9 @@ async def test_webhook_secret_health_and_no_telegram_configuration():
         response = await client.post(settings.path, json={"update_id": 1},
                                     headers={"X-Telegram-Bot-Api-Secret-Token": settings.secret})
         assert response.status == 200
-        dp.feed_webhook_update.assert_awaited_once()
+        await asyncio.wait_for(background_called.wait(), timeout=1)
+        dp.feed_raw_update.assert_awaited_once()
+        dp.feed_webhook_update.assert_not_awaited()
         db.side_effect = RuntimeError("must-not-leak-credentials")
         response = await client.get("/health")
         assert response.status == 503

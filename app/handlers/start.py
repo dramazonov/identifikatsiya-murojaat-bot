@@ -101,16 +101,40 @@ RATE_LIMIT_WINDOW_SECONDS = 60.0
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
-    await state.clear()
-
-    user = await get_user_by_telegram_id(message.from_user.id)
-    if user is not None:
-        await message.answer(WELCOME_BACK_TEXT, reply_markup=main_menu_keyboard())
+    # Telegram can retry the exact same webhook update when a free hosting
+    # instance is cold-starting. A duplicate /start must never clear a state
+    # that has already advanced to phone/region/etc. The lease is keyed by
+    # chat_id + message_id, so a genuinely new /start still works normally.
+    submission_key = f"start:{message.chat.id}:{message.message_id}"
+    submission_token = await acquire_submission(submission_key)
+    if submission_token is None:
+        logger.info(
+            "Ignoring duplicate delivery of /start message %s in chat %s",
+            message.message_id,
+            message.chat.id,
+        )
         return
 
-    # New user: keep the existing registration flow unchanged.
-    await state.set_state(Registration.waiting_for_full_name)
-    await message.answer(WELCOME_TEXT)
+    succeeded = False
+    try:
+        await state.clear()
+
+        user = await get_user_by_telegram_id(message.from_user.id)
+        if user is not None:
+            await message.answer(WELCOME_BACK_TEXT, reply_markup=main_menu_keyboard())
+            succeeded = True
+            return
+
+        # New user: keep the existing registration flow unchanged.
+        await state.set_state(Registration.waiting_for_full_name)
+        await message.answer(WELCOME_TEXT)
+        succeeded = True
+    finally:
+        await finish_submission(
+            submission_key,
+            submission_token,
+            failed=not succeeded,
+        )
 
 
 @router.message(F.text == MENU_APPEAL)
