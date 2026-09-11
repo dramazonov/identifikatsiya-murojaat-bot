@@ -27,6 +27,9 @@ CONTACT_BUTTON_TEXT = t("button.share_phone", DEFAULT_LANGUAGE)
 REGION_CALLBACK_PREFIX = "region"
 DISTRICT_CALLBACK_PREFIX = "district"
 APPEAL_REPLY_CALLBACK_PREFIX = "appeal_reply"
+APPEAL_CANCEL_REPLY_CALLBACK_PREFIX = "appeal_cancel_reply"
+SUGGESTION_REVIEW_CALLBACK_PREFIX = "suggestion_review"
+ADMIN_PANEL_CALLBACK_PREFIX = "admin_panel"
 APPEAL_CATEGORY_CALLBACK_PREFIX = "appeal_cat"
 APPEAL_ATTACHMENT_SKIP_CALLBACK = "appeal_attach_skip"
 APPEAL_CONFIRM_CALLBACK = "appeal_confirm"
@@ -36,6 +39,8 @@ MY_APPEALS_CALLBACK_PREFIX = "myappeals"
 SETTINGS_CALLBACK_PREFIX = "settings"
 SETTINGS_LANGUAGE_CALLBACK_PREFIX = "settings_lang"
 REPLY_BUTTON_TEXT = "✍️ Жавоб бериш"
+CANCEL_REPLY_BUTTON_TEXT = "❌ Жавоб беришни бекор қилиш"
+SUGGESTION_REVIEW_BUTTON_TEXT = "☑️ Кўриб чиқилди"
 
 # Backward-compatible default labels used by older imports/tests. Handlers now
 # match every translated variant via menu_texts().
@@ -159,6 +164,34 @@ def admin_reply_keyboard(appeal_id: int) -> InlineKeyboardMarkup:
     builder.button(
         text=REPLY_BUTTON_TEXT, callback_data=f"{APPEAL_REPLY_CALLBACK_PREFIX}:{appeal_id}"
     )
+    return builder.as_markup()
+
+
+def admin_cancel_reply_keyboard(appeal_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=CANCEL_REPLY_BUTTON_TEXT,
+        callback_data=f"{APPEAL_CANCEL_REPLY_CALLBACK_PREFIX}:{appeal_id}",
+    )
+    return builder.as_markup()
+
+
+def suggestion_review_keyboard(suggestion_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=SUGGESTION_REVIEW_BUTTON_TEXT,
+        callback_data=f"{SUGGESTION_REVIEW_CALLBACK_PREFIX}:{suggestion_id}",
+    )
+    return builder.as_markup()
+
+
+def admin_panel_keyboard(*, superadmin: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="📨 Мурожаатлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:appeals"))
+    if superadmin:
+        builder.row(InlineKeyboardButton(text="💡 Таклифлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:suggestions"))
+    builder.row(InlineKeyboardButton(text="🔎 Қидириш", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:search"))
+    builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:stats"))
     return builder.as_markup()
 
 

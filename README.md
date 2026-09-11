@@ -63,3 +63,11 @@ HTTPS validation are still required on the VPS before cutover.
   job, aiohttp webhook server and Caddy HTTPS. Startup never registers a webhook.
 - Template: .env.production.example; keep the real server env outside the repo.
 - Tests: install requirements-dev.txt; run py -m compileall -q app and py -m pytest -q.
+
+## Stage 23 — Admin workflow 2.0
+
+- Two admin roles: SUPERADMIN and ADMIN (`SUPERADMIN_IDS` + `ADMIN_IDS`).
+- New appeals are broadcast to every admin; the first reply click atomically claims the appeal for 15 minutes.
+- All other admin copies lose the reply button after a successful claim; cancel reopens the appeal.
+- Suggestions are delivered only to SUPERADMIN users and have a single one-time `Ko‘rib chiqildi` action.
+- `/admin` opens the role-aware admin panel with appeals, search and statistics; suggestion views are superadmin-only.

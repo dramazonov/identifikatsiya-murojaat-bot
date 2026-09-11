@@ -1,5 +1,5 @@
 from app.services.admin_contact_service import complete_admin_contact, create_admin_contact
-from app.services.appeal_service import complete_appeal, create_appeal
+from app.services.appeal_service import claim_appeal, complete_appeal, create_appeal
 from app.services.user_service import (
     PHONE_VERIFICATION_SOURCE_TELEGRAM,
     save_user,
@@ -17,6 +17,8 @@ async def test_failed_appeal_delivery_is_persisted_with_admin_answer():
         phone_verification_source=PHONE_VERIFICATION_SOURCE_TELEGRAM,
     )
     appeal = await create_appeal(telegram_id, "Delivery lifecycle test")
+    _, claimed = await claim_appeal(appeal.id, 123456)
+    assert claimed is True
     completed = await complete_appeal(
         appeal.id,
         123456,

@@ -34,6 +34,7 @@ class AccountSettings(StatesGroup):
 
 class AdminStates(StatesGroup):
     waiting_for_reply = State()
+    waiting_for_search = State()
 
 
 class AdminContactStates(StatesGroup):

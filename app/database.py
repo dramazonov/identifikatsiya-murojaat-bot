@@ -103,6 +103,7 @@ async def init_db() -> None:
     if engine.dialect.name == "sqlite":
         await _migrate_users_table()
         await _migrate_appeals_table()
+        await _migrate_suggestions_table()
         await _migrate_admin_contacts_table()
 
 
@@ -212,12 +213,31 @@ async def _migrate_appeals_table() -> None:
             await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_name VARCHAR(255)")
         if "attachment_size" not in existing_columns:
             await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN attachment_size BIGINT")
+        if "claim_expires_at" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN claim_expires_at DATETIME")
 
         await conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_appeals_category_code ON appeals (category_code)"
         )
         await conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS ix_appeals_status ON appeals (status)"
+        )
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_appeals_claim_expires_at ON appeals (claim_expires_at)"
+        )
+
+
+async def _migrate_suggestions_table() -> None:
+    """Add Stage 23 one-step suggestion review metadata to legacy SQLite."""
+    async with engine.begin() as conn:
+        result = await conn.exec_driver_sql("PRAGMA table_info(suggestions)")
+        existing_columns = {row[1] for row in result.fetchall()}
+        if "reviewed_by" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE suggestions ADD COLUMN reviewed_by BIGINT")
+        if "reviewed_at" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE suggestions ADD COLUMN reviewed_at DATETIME")
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_suggestions_status ON suggestions (status)"
         )
 
 

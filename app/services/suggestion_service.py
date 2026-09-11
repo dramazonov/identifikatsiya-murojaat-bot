@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.database import async_session
 from app.models import Suggestion, User
@@ -65,3 +65,35 @@ async def get_suggestion_by_id(suggestion_id: int) -> Suggestion | None:
     async with async_session() as session:
         result = await session.execute(select(Suggestion).where(Suggestion.id == suggestion_id))
         return result.scalar_one_or_none()
+
+
+async def review_suggestion(suggestion_id: int, superadmin_id: int) -> tuple[Suggestion | None, bool]:
+    """Atomic one-time transition NEW -> REVIEWED. First superadmin click wins."""
+    now = utcnow()
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(Suggestion)
+                .where(Suggestion.id == suggestion_id, Suggestion.status == "NEW")
+                .values(status="REVIEWED", reviewed_by=superadmin_id, reviewed_at=now, updated_at=now)
+            )
+            changed = result.rowcount > 0
+            suggestion = await session.get(Suggestion, suggestion_id)
+        return suggestion, changed
+
+
+async def suggestion_counts() -> dict[str, int]:
+    async with async_session() as session:
+        result = await session.execute(
+            select(Suggestion.status, func.count(Suggestion.id)).group_by(Suggestion.status)
+        )
+        return {status: int(count) for status, count in result.all()}
+
+
+async def list_suggestions(*, status: str | None = None, limit: int = 10) -> list[Suggestion]:
+    async with async_session() as session:
+        stmt = select(Suggestion)
+        if status is not None:
+            stmt = stmt.where(Suggestion.status == status)
+        result = await session.execute(stmt.order_by(Suggestion.id.desc()).limit(limit))
+        return list(result.scalars().all())

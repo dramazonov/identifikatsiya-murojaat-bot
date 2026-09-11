@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import ErrorEvent, Update
 
-from app.config import ADMIN_IDS, BOT_TOKEN
+from app.config import BOT_TOKEN, SUPERADMIN_IDS, all_admin_ids
 from app.database import init_db
 from app.handlers.admin import router as admin_router
 from app.handlers.appeal_flow import router as appeal_router
@@ -149,8 +149,10 @@ def main():
     settings.validate(DATABASE_URL)
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is not configured")
-    if not ADMIN_IDS:
-        logger.warning("ADMIN_IDS is empty. No admin will receive notifications.")
+    if not all_admin_ids():
+        logger.warning("No admin ids configured. No admin will receive notifications.")
+    if not SUPERADMIN_IDS:
+        logger.warning("SUPERADMIN_IDS is empty. Suggestions will not have a superadmin recipient.")
     if settings.mode == "polling":
         asyncio.run(poll(settings))
     else:

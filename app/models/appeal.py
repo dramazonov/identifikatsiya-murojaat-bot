@@ -38,6 +38,7 @@ class Appeal(Base):
     admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     admin_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     delivery_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     delivery_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivery_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

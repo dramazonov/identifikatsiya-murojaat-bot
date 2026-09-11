@@ -67,9 +67,9 @@ async def validate():
     async with engine.connect() as connection:
         await connection.run_sync(inspect_schema)
         require((await connection.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one()
-                == "e13f7a2c9b41", "Unexpected baseline revision")
+                == "f4a2c8d17b63", "Unexpected baseline revision")
         require((await connection.exec_driver_sql("SHOW timezone")).scalar_one() == "UTC", "Non-UTC session")
-    print("PASS: revision e13f7a2c9b41, tables, indexes, unique constraints, foreign keys, schema and UTC")
+    print("PASS: revision f4a2c8d17b63, tables, indexes, unique constraints, foreign keys, schema and UTC")
     await validate_services()
 
 

@@ -4,15 +4,34 @@ import html
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.config import ADMIN_IDS
-from app.keyboards import APPEAL_REPLY_CALLBACK_PREFIX, admin_reply_keyboard
+from app.config import SUPERADMIN_IDS, all_admin_ids, is_admin, is_superadmin
+from app.keyboards import (
+    ADMIN_PANEL_CALLBACK_PREFIX,
+    APPEAL_CANCEL_REPLY_CALLBACK_PREFIX,
+    APPEAL_REPLY_CALLBACK_PREFIX,
+    SUGGESTION_REVIEW_CALLBACK_PREFIX,
+    admin_cancel_reply_keyboard,
+    admin_panel_keyboard,
+    admin_reply_keyboard,
+    suggestion_review_keyboard,
+)
 from app.i18n import appeal_category_text, appeal_status_text, t
 from app.models import Appeal, Suggestion, User
-from app.services.appeal_service import claim_appeal, complete_appeal, get_appeal_by_id
-from app.services.datetime_utils import format_tashkent
+from app.services.appeal_service import (
+    admin_appeal_counts,
+    claim_appeal,
+    complete_appeal,
+    get_appeal_by_id,
+    list_admin_appeals,
+    release_appeal_claim,
+    search_appeal_by_number,
+)
+from app.services.datetime_utils import format_tashkent, utcnow
+from app.services.admin_notification_state import clear_notifications, list_notifications, remember_notification
 from app.services.telegram_delivery import (
     TELEGRAM_MESSAGE_LIMIT,
     safe_edit_message_text,
@@ -20,6 +39,7 @@ from app.services.telegram_delivery import (
 )
 from app.services.delivery_status import DELIVERY_DELIVERED, DELIVERY_FAILED, classify_delivery_exception
 from app.services.user_service import get_user_by_id, mark_user_unreachable
+from app.services.suggestion_service import list_suggestions, review_suggestion, suggestion_counts
 from app.states import AdminStates
 
 logger = logging.getLogger(__name__)
@@ -78,7 +98,7 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
     the button is never lost and is always attached to a message that stays
     editable within the limit later (see process_admin_reply_text).
     """
-    if not ADMIN_IDS:
+    if not all_admin_ids():
         return
 
     body_text = _build_appeal_body_text(appeal, user)
@@ -86,7 +106,7 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
     full_text = f"{body_text}\n\n{footer_text}"
     keyboard = admin_reply_keyboard(appeal.id)
 
-    for admin_id in ADMIN_IDS:
+    for admin_id in all_admin_ids():
         if appeal.attachment_file_id:
             try:
                 caption = f"📎 {html.escape(appeal.appeal_number)} — мурожаат иловаси"
@@ -104,43 +124,68 @@ async def notify_admins_new_appeal(bot: Bot, appeal: Appeal, user: User) -> None
                 )
         try:
             if len(full_text) <= TELEGRAM_MESSAGE_LIMIT:
-                await send_long_message(bot, admin_id, full_text, reply_markup=keyboard)
+                sent = await send_long_message(bot, admin_id, full_text, reply_markup=keyboard)
             else:
                 await send_long_message(bot, admin_id, body_text)
-                await send_long_message(bot, admin_id, footer_text, reply_markup=keyboard)
+                sent = await send_long_message(bot, admin_id, footer_text, reply_markup=keyboard)
+            await remember_notification("appeal", appeal.id, admin_id, sent.chat.id, sent.message_id)
         except Exception:
             logger.exception("Failed to notify admin %s about appeal %s", admin_id, appeal.appeal_number)
 
 
 async def notify_admins_new_suggestion(bot: Bot, suggestion: Suggestion, user: User) -> None:
-    """Send a new-suggestion notification to every admin.
-
-    Mirrors ``notify_admins_new_appeal``'s best-effort semantics: a failure
-    sending to one admin is logged and does not stop the rest from being
-    notified. No "Жавоб бериш" button is attached -- admin replies to
-    suggestions are not implemented yet. If ADMIN_IDS is empty this is a no-op.
-
-    MVP audit CRITICAL #1: no button is involved here, so a text that exceeds
-    Telegram's 4096-char limit is simply delivered as multiple messages via
-    send_long_message instead of silently failing to send at all.
-    """
-    if not ADMIN_IDS:
+    """Stage 23: suggestions go only to SUPERADMIN users."""
+    if not SUPERADMIN_IDS:
         return
-
     text = _build_suggestion_notification_text(suggestion, user)
+    keyboard = suggestion_review_keyboard(suggestion.id)
+    for admin_id in SUPERADMIN_IDS:
+        try:
+            sent = await send_long_message(bot, admin_id, text, reply_markup=keyboard)
+            await remember_notification("suggestion", suggestion.id, admin_id, sent.chat.id, sent.message_id)
+        except Exception:
+            logger.exception(
+                "Failed to notify superadmin %s about suggestion %s", admin_id, suggestion.suggestion_number
+            )
 
-    for admin_id in ADMIN_IDS:
+
+
+
+def _admin_display_name(user) -> str:
+    return html.escape(getattr(user, "full_name", None) or getattr(user, "username", None) or str(user.id))
+
+
+async def _set_appeal_buttons(bot: Bot, appeal_id: int, *, enabled: bool) -> None:
+    notifications = await list_notifications("appeal", appeal_id)
+    markup = admin_reply_keyboard(appeal_id) if enabled else None
+    for info in notifications.values():
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=info["chat_id"], message_id=info["message_id"], reply_markup=markup
+            )
+        except Exception:
+            logger.exception("Failed to update appeal buttons for %s", appeal_id)
+
+
+async def _broadcast_admins(bot: Bot, text: str) -> None:
+    for admin_id in all_admin_ids():
         try:
             await send_long_message(bot, admin_id, text)
         except Exception:
-            logger.exception(
-                "Failed to notify admin %s about suggestion %s", admin_id, suggestion.suggestion_number
-            )
+            logger.exception("Failed to broadcast admin update to %s", admin_id)
+
+
+async def _broadcast_superadmins(bot: Bot, text: str) -> None:
+    for admin_id in SUPERADMIN_IDS:
+        try:
+            await send_long_message(bot, admin_id, text)
+        except Exception:
+            logger.exception("Failed to broadcast superadmin update to %s", admin_id)
 
 
 @router.callback_query(F.data.startswith(f"{APPEAL_REPLY_CALLBACK_PREFIX}:"))
 async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    if callback.from_user.id not in ADMIN_IDS:
+    if not is_admin(callback.from_user.id):
         await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
         return
 
@@ -199,6 +244,14 @@ async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMConte
         except Exception:
             logger.exception("Failed to notify citizen about IN_PROGRESS status for appeal %s", appeal_id)
 
+        # Remove the reply button from every admin copy immediately. The DB claim
+        # above is authoritative; these edits are only the synchronized UI.
+        await _set_appeal_buttons(callback.bot, appeal_id, enabled=False)
+        await _broadcast_admins(
+            callback.bot,
+            f"🟡 <b>{html.escape(appeal.appeal_number)}</b> мурожаати {_admin_display_name(callback.from_user)} томонидан кўриб чиқилмоқда.",
+        )
+
     await state.set_state(AdminStates.waiting_for_reply)
     await state.update_data(
         appeal_id=appeal_id,
@@ -207,13 +260,13 @@ async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMConte
     )
 
     if callback.message is not None:
-        await callback.message.answer(ASK_REPLY_TEXT)
+        await callback.message.answer(ASK_REPLY_TEXT, reply_markup=admin_cancel_reply_keyboard(appeal_id))
     await callback.answer()
 
 
 @router.message(AdminStates.waiting_for_reply, F.text)
 async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
-    if message.from_user.id not in ADMIN_IDS:
+    if not is_admin(message.from_user.id):
         # Shouldn't normally happen (only admins are ever put into this state),
         # but never let a non-admin act on it.
         await state.clear()
@@ -239,6 +292,14 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
     if appeal is None:
         await state.clear()
         await message.answer(APPEAL_NOT_FOUND_TEXT)
+        return
+    if appeal.status != "IN_PROGRESS" or appeal.admin_id != message.from_user.id:
+        await state.clear()
+        await message.answer("⚠️ Бу мурожаат энди Сизга бириктирилмаган.")
+        return
+    if appeal.claim_expires_at is not None and appeal.claim_expires_at <= utcnow():
+        await state.clear()
+        await message.answer("⏱ Жавоб бериш учун 15 дақиқалик вақт тугади. Мурожаатни қайта қабул қилинг.")
         return
 
     user = await get_user_by_id(appeal.user_id)
@@ -319,10 +380,178 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
         except Exception:
             logger.exception("Failed to send answer follow-up message for appeal %s", appeal_id)
 
+    if completed_appeal is not None:
+        await _broadcast_admins(
+            message.bot,
+            f"✅ <b>{html.escape(completed_appeal.appeal_number)}</b> мурожаати бўйича {_admin_display_name(message.from_user)} жавоб юборди.",
+        )
+        await clear_notifications("appeal", appeal_id)
+
+
+@router.callback_query(F.data.startswith(f"{APPEAL_CANCEL_REPLY_CALLBACK_PREFIX}:"))
+async def process_appeal_cancel_reply(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+    appeal_id = _parse_appeal_id(callback.data)
+    if appeal_id is None:
+        await callback.answer(APPEAL_NOT_FOUND_TEXT, show_alert=True)
+        return
+    appeal = await release_appeal_claim(appeal_id, callback.from_user.id)
+    if appeal is None:
+        await callback.answer(APPEAL_NOT_FOUND_TEXT, show_alert=True)
+        return
+    if appeal.status != "NEW":
+        await callback.answer("Бу мурожаатни бекор қилиш мумкин эмас.", show_alert=True)
+        return
+    await state.clear()
+    await _set_appeal_buttons(callback.bot, appeal_id, enabled=True)
+    await _broadcast_admins(
+        callback.bot,
+        f"🔓 <b>{html.escape(appeal.appeal_number)}</b> мурожаати яна жавоб бериш учун очилди.",
+    )
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+    await callback.answer("Мурожаат қайта очилди.")
+
+
+@router.callback_query(F.data.startswith(f"{SUGGESTION_REVIEW_CALLBACK_PREFIX}:"))
+async def process_suggestion_review(callback: CallbackQuery) -> None:
+    if not is_superadmin(callback.from_user.id):
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+    suggestion_id = _parse_appeal_id(callback.data)
+    if suggestion_id is None:
+        await callback.answer("Таклиф топилмади.", show_alert=True)
+        return
+    suggestion, changed = await review_suggestion(suggestion_id, callback.from_user.id)
+    if suggestion is None:
+        await callback.answer("Таклиф топилмади.", show_alert=True)
+        return
+    if not changed:
+        await callback.answer("Бу таклиф аввал кўриб чиқилган.", show_alert=True)
+        if callback.message is not None:
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+        return
+
+    notifications = await list_notifications("suggestion", suggestion.id)
+    for info in notifications.values():
+        try:
+            await callback.bot.edit_message_reply_markup(
+                chat_id=info["chat_id"], message_id=info["message_id"], reply_markup=None
+            )
+        except Exception:
+            logger.exception("Failed to clear suggestion review button for %s", suggestion.id)
+
+    citizen = await get_user_by_id(suggestion.user_id)
+    if citizen is not None:
+        try:
+            await send_long_message(
+                callback.bot,
+                citizen.telegram_id,
+                t("suggestion.reviewed", citizen.language_code, suggestion_number=suggestion.suggestion_number),
+            )
+        except Exception:
+            logger.exception("Failed to notify citizen about reviewed suggestion %s", suggestion.id)
+
+    await _broadcast_superadmins(
+        callback.bot,
+        f"☑️ <b>{html.escape(suggestion.suggestion_number)}</b> таклифи {_admin_display_name(callback.from_user)} томонидан кўриб чиқилди.",
+    )
+    await clear_notifications("suggestion", suggestion.id)
+    await callback.answer("Таклиф кўриб чиқилди.")
+
+
+@router.message(Command("admin"))
+async def admin_panel_command(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        await message.answer(NOT_ADMIN_TEXT)
+        return
+    await state.clear()
+    role = "SUPERADMIN" if is_superadmin(message.from_user.id) else "ADMIN"
+    await message.answer(
+        f"👨‍💼 <b>Админ панель</b>\n\nРоль: <b>{role}</b>",
+        reply_markup=admin_panel_keyboard(superadmin=is_superadmin(message.from_user.id)),
+    )
+
+
+@router.callback_query(F.data.startswith(f"{ADMIN_PANEL_CALLBACK_PREFIX}:"))
+async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not is_admin(callback.from_user.id):
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+    action = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+    if action == "stats":
+        appeals = await admin_appeal_counts()
+        suggestions = await suggestion_counts() if is_superadmin(callback.from_user.id) else {}
+        text = (
+            "📊 <b>Статистика</b>\n\n"
+            f"🆕 Янги мурожаатлар: {appeals.get('NEW', 0)}\n"
+            f"🟡 Кўриб чиқилмоқда: {appeals.get('IN_PROGRESS', 0)}\n"
+            f"✅ Якунланган: {appeals.get('COMPLETED', 0)}\n"
+            f"❌ Рад этилган: {appeals.get('REJECTED', 0)}"
+        )
+        if is_superadmin(callback.from_user.id):
+            text += f"\n\n💡 Янги таклифлар: {suggestions.get('NEW', 0)}\n☑️ Кўриб чиқилган: {suggestions.get('REVIEWED', 0)}"
+        await callback.message.answer(text)
+    elif action == "appeals":
+        rows = await list_admin_appeals("NEW", limit=10)
+        if not rows:
+            await callback.message.answer("📨 Янги мурожаатлар йўқ.")
+        else:
+            await callback.message.answer("📨 <b>Охирги янги мурожаатлар</b>")
+            for appeal in rows:
+                await callback.message.answer(
+                    f"{html.escape(appeal.appeal_number)} — {appeal_status_text('NEW', 'uz_cyrl')}",
+                    reply_markup=admin_reply_keyboard(appeal.id),
+                )
+    elif action == "suggestions":
+        if not is_superadmin(callback.from_user.id):
+            await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+            return
+        rows = await list_suggestions(status="NEW", limit=10)
+        if not rows:
+            await callback.message.answer("💡 Янги таклифлар йўқ.")
+        else:
+            for suggestion in rows:
+                await callback.message.answer(
+                    f"💡 {html.escape(suggestion.suggestion_number)}",
+                    reply_markup=suggestion_review_keyboard(suggestion.id),
+                )
+    elif action == "search":
+        await state.set_state(AdminStates.waiting_for_search)
+        await callback.message.answer("🔎 Мурожаат рақамини киритинг. Масалан: MUR-000123")
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_for_search, F.text)
+async def admin_search_message(message: Message, state: FSMContext) -> None:
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    appeal = await search_appeal_by_number(message.text.strip())
+    await state.clear()
+    if appeal is None:
+        await message.answer("Мурожаат топилмади.")
+        return
+    user = await get_user_by_id(appeal.user_id)
+    if user is None:
+        await message.answer("Мурожаат эгаси топилмади.")
+        return
+    text = f"{_build_appeal_body_text(appeal, user)}\n\n{_build_appeal_footer_text(appeal, completed=appeal.status == 'COMPLETED')}"
+    markup = admin_reply_keyboard(appeal.id) if appeal.status == "NEW" else None
+    await send_long_message(message.bot, message.chat.id, text, reply_markup=markup)
+
 
 @router.message(AdminStates.waiting_for_reply)
 async def process_admin_reply_invalid(message: Message) -> None:
-    if message.from_user.id not in ADMIN_IDS:
+    if not is_admin(message.from_user.id):
         return
     await message.answer(INVALID_REPLY_TEXT)
 

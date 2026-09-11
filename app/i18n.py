@@ -352,6 +352,12 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "ru": "Некорректный текст предложения. Введите от 5 до 4000 символов.",
         "en": "Invalid suggestion text. Enter 5–4000 characters.",
     },
+    "suggestion.reviewed": {
+        "uz_latn": "☑️ {suggestion_number} raqamli taklifingiz ko‘rib chiqildi.",
+        "uz_cyrl": "☑️ {suggestion_number} рақамли таклифингиз кўриб чиқилди.",
+        "ru": "☑️ Ваше предложение {suggestion_number} рассмотрено.",
+        "en": "☑️ Your suggestion {suggestion_number} has been reviewed.",
+    },
     "suggestion.success": {
         "uz_latn": "✅ Taklifingiz qabul qilindi.\n\nTaklif raqami: {suggestion_number}",
         "uz_cyrl": "✅ Таклифингиз қабул қилинди.\n\nТаклиф рақами: {suggestion_number}",
