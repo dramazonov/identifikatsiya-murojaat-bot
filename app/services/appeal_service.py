@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.database import async_session
 from app.models import Appeal, User
@@ -134,3 +134,50 @@ async def complete_appeal(
             appeal.updated_at = now
 
         return appeal
+
+async def count_user_appeals(telegram_id: int) -> int:
+    """Count appeals owned by one Telegram user."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(func.count(Appeal.id))
+            .join(User, Appeal.user_id == User.id)
+            .where(User.telegram_id == telegram_id)
+        )
+        return int(result.scalar_one())
+
+
+async def list_user_appeals(
+    telegram_id: int, *, offset: int = 0, limit: int = 5
+) -> list[Appeal]:
+    """Return one citizen's appeals newest-first.
+
+    The ownership predicate lives in the query, not only in the Telegram
+    callback layer, so a forged appeal id/page cannot expose another user's
+    records.
+    """
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    if limit <= 0 or limit > 50:
+        raise ValueError("limit must be between 1 and 50")
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(Appeal)
+            .join(User, Appeal.user_id == User.id)
+            .where(User.telegram_id == telegram_id)
+            .order_by(Appeal.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
+async def get_user_appeal_by_id(telegram_id: int, appeal_id: int) -> Appeal | None:
+    """Fetch an appeal only when it belongs to ``telegram_id``."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Appeal)
+            .join(User, Appeal.user_id == User.id)
+            .where(User.telegram_id == telegram_id, Appeal.id == appeal_id)
+        )
+        return result.scalar_one_or_none()

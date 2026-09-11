@@ -20,6 +20,9 @@ REGION_CALLBACK_PREFIX = "region"
 DISTRICT_CALLBACK_PREFIX = "district"
 APPEAL_REPLY_CALLBACK_PREFIX = "appeal_reply"
 ADMIN_CONTACT_REPLY_CALLBACK_PREFIX = "admin_contact_reply"
+MY_APPEALS_CALLBACK_PREFIX = "myappeals"
+SETTINGS_CALLBACK_PREFIX = "settings"
+SETTINGS_LANGUAGE_CALLBACK_PREFIX = "settings_lang"
 REPLY_BUTTON_TEXT = "✍️ Жавоб бериш"
 
 # Backward-compatible default labels used by older imports/tests. Handlers now
@@ -29,6 +32,8 @@ MENU_APPEAL = t("menu.appeal", DEFAULT_LANGUAGE)
 MENU_SUGGESTION = t("menu.suggestion", DEFAULT_LANGUAGE)
 MENU_DOCUMENTS = t("menu.documents", DEFAULT_LANGUAGE)
 MENU_ADMIN_CONTACT = t("menu.admin_contact", DEFAULT_LANGUAGE)
+MENU_MY_APPEALS = t("menu.my_appeals", DEFAULT_LANGUAGE)
+MENU_SETTINGS = t("menu.settings", DEFAULT_LANGUAGE)
 
 FAQ_CATEGORY_CALLBACK_PREFIX = "faq_cat"
 FAQ_QUESTION_CALLBACK_PREFIX = "faq_q"
@@ -117,10 +122,122 @@ def main_menu_keyboard(language_code: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMa
                 KeyboardButton(text=t("menu.suggestion", language_code)),
                 KeyboardButton(text=t("menu.documents", language_code)),
             ],
-            [KeyboardButton(text=t("menu.admin_contact", language_code))],
+            [
+                KeyboardButton(text=t("menu.my_appeals", language_code)),
+                KeyboardButton(text=t("menu.admin_contact", language_code)),
+            ],
+            [KeyboardButton(text=t("menu.settings", language_code))],
         ],
         resize_keyboard=True,
     )
+
+
+def my_appeals_keyboard(
+    appeals,
+    *,
+    page: int,
+    total_pages: int,
+    language_code: str = DEFAULT_LANGUAGE,
+    status_emoji=None,
+    detail_back_only: bool = False,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if detail_back_only:
+        builder.row(
+            InlineKeyboardButton(
+                text=t("button.back", language_code),
+                callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:back",
+            ),
+            InlineKeyboardButton(
+                text=t("button.home", language_code),
+                callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:home",
+            ),
+        )
+        return builder.as_markup()
+
+    for appeal in appeals:
+        emoji = status_emoji(appeal.status) if status_emoji else "📌"
+        builder.button(
+            text=f"{emoji} {appeal.appeal_number}",
+            callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:item:{appeal.id}",
+        )
+    builder.adjust(1)
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text=t("button.previous", language_code),
+                callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:page:{page - 1}",
+            )
+        )
+    if page + 1 < total_pages:
+        nav.append(
+            InlineKeyboardButton(
+                text=t("button.next", language_code),
+                callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:page:{page + 1}",
+            )
+        )
+    if nav:
+        builder.row(*nav)
+    builder.row(
+        InlineKeyboardButton(
+            text=t("button.home", language_code),
+            callback_data=f"{MY_APPEALS_CALLBACK_PREFIX}:home",
+        )
+    )
+    return builder.as_markup()
+
+
+def settings_keyboard(
+    language_code: str = DEFAULT_LANGUAGE, *, back_only: bool = False
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if not back_only:
+        builder.button(
+            text=t("settings.profile", language_code),
+            callback_data=f"{SETTINGS_CALLBACK_PREFIX}:profile",
+        )
+        builder.button(
+            text=t("settings.language", language_code),
+            callback_data=f"{SETTINGS_CALLBACK_PREFIX}:language",
+        )
+        builder.button(
+            text=t("settings.phone", language_code),
+            callback_data=f"{SETTINGS_CALLBACK_PREFIX}:phone",
+        )
+        builder.adjust(1)
+    if back_only:
+        builder.row(
+            InlineKeyboardButton(
+                text=t("button.back", language_code),
+                callback_data=f"{SETTINGS_CALLBACK_PREFIX}:back",
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(
+            text=t("button.home", language_code),
+            callback_data=f"{SETTINGS_CALLBACK_PREFIX}:home",
+        )
+    )
+    return builder.as_markup()
+
+
+def settings_language_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for code in SUPPORTED_LANGUAGES:
+        builder.button(
+            text=LANGUAGE_LABELS[code],
+            callback_data=f"{SETTINGS_LANGUAGE_CALLBACK_PREFIX}:{code}",
+        )
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(
+            text=t("button.back", language_code),
+            callback_data=f"{SETTINGS_CALLBACK_PREFIX}:back",
+        )
+    )
+    return builder.as_markup()
 
 
 def faq_categories_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:

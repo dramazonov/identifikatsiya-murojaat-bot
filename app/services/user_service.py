@@ -130,6 +130,41 @@ async def set_user_language(
         return result.scalar_one()
 
 
+async def update_verified_phone(
+    telegram_id: int, telegram_username: str | None, phone: str
+) -> User | None:
+    """Replace only the citizen's verified phone number.
+
+    Used by Settings -> phone update. Ownership is re-verified by the handler
+    through Telegram Contact ``user_id`` before this function is called, so the
+    database can safely mark the new number as Telegram-verified without
+    rewriting the rest of the profile.
+    """
+    now = utcnow()
+    async with async_session() as session:
+        async with session.begin():
+            result = await session.execute(
+                update(User)
+                .where(User.telegram_id == telegram_id)
+                .values(
+                    telegram_username=telegram_username,
+                    phone=phone,
+                    phone_verified=True,
+                    phone_verification_source=PHONE_VERIFICATION_SOURCE_TELEGRAM,
+                    phone_verified_at=now,
+                    telegram_status=TELEGRAM_STATUS_ACTIVE,
+                    last_seen_at=now,
+                    unreachable_at=None,
+                    updated_at=now,
+                )
+            )
+            if result.rowcount == 0:
+                return None
+
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        return result.scalar_one_or_none()
+
+
 async def save_user_location(telegram_id: int, region: str, district: str) -> User:
     now = utcnow()
     async with async_session() as session:

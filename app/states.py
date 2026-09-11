@@ -16,6 +16,12 @@ class SuggestionStates(StatesGroup):
     waiting_for_suggestion = State()
 
 
+class AccountSettings(StatesGroup):
+    """Citizen account/settings states."""
+
+    waiting_for_phone = State()
+
+
 class AdminStates(StatesGroup):
     waiting_for_reply = State()
 

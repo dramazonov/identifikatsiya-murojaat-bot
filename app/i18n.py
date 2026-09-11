@@ -127,6 +127,18 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "ru": "👨‍💼 Связаться с администратором",
         "en": "👨‍💼 Contact an administrator",
     },
+    "menu.my_appeals": {
+        "uz_latn": "📂 Mening murojaatlarim",
+        "uz_cyrl": "📂 Менинг мурожаатларим",
+        "ru": "📂 Мои обращения",
+        "en": "📂 My appeals",
+    },
+    "menu.settings": {
+        "uz_latn": "⚙️ Sozlamalar",
+        "uz_cyrl": "⚙️ Созламалар",
+        "ru": "⚙️ Настройки",
+        "en": "⚙️ Settings",
+    },
     "button.share_phone": {
         "uz_latn": "📱 Telefon raqamimni yuborish",
         "uz_cyrl": "📱 Телефон рақамимни юбориш",
@@ -144,6 +156,18 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "uz_cyrl": "🏠 Асосий меню",
         "ru": "🏠 Главное меню",
         "en": "🏠 Main menu",
+    },
+    "button.previous": {
+        "uz_latn": "⬅️ Oldingi",
+        "uz_cyrl": "⬅️ Олдинги",
+        "ru": "⬅️ Назад",
+        "en": "⬅️ Previous",
+    },
+    "button.next": {
+        "uz_latn": "Keyingi ➡️",
+        "uz_cyrl": "Кейинги ➡️",
+        "ru": "Вперёд ➡️",
+        "en": "Next ➡️",
     },
     "button.official_source": {
         "uz_latn": "🔗 Rasmiy manba",
@@ -228,6 +252,120 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "uz_cyrl": "⏳ Сиз жуда тез-тез юбормоқдасиз. Бир оз кутиб қайта уриниб кўринг.",
         "ru": "⏳ Слишком много запросов. Подождите немного и попробуйте снова.",
         "en": "⏳ Too many requests. Please wait a moment and try again.",
+    },
+    "common.invalid_action": {
+        "uz_latn": "Noto‘g‘ri amal. Iltimos, menyudan qayta tanlang.",
+        "uz_cyrl": "Нотўғри амал. Илтимос, менюдан қайта танланг.",
+        "ru": "Некорректное действие. Пожалуйста, выберите пункт меню заново.",
+        "en": "Invalid action. Please choose again from the menu.",
+    },
+    "my_appeals.title": {
+        "uz_latn": "📂 Mening murojaatlarim\n\nJami: {total} ta\nSahifa: {current_page}/{total_pages}\n\nKo‘rish uchun murojaat raqamini tanlang:",
+        "uz_cyrl": "📂 Менинг мурожаатларим\n\nЖами: {total} та\nСаҳифа: {current_page}/{total_pages}\n\nКўриш учун мурожаат рақамини танланг:",
+        "ru": "📂 Мои обращения\n\nВсего: {total}\nСтраница: {current_page}/{total_pages}\n\nВыберите номер обращения:",
+        "en": "📂 My appeals\n\nTotal: {total}\nPage: {current_page}/{total_pages}\n\nSelect an appeal number to view it:",
+    },
+    "my_appeals.empty": {
+        "uz_latn": "📂 Sizda hozircha yuborilgan murojaatlar yo‘q.",
+        "uz_cyrl": "📂 Сизда ҳозирча юборилган мурожаатлар йўқ.",
+        "ru": "📂 У вас пока нет отправленных обращений.",
+        "en": "📂 You have not submitted any appeals yet.",
+    },
+    "my_appeals.empty_short": {
+        "uz_latn": "Murojaatlar topilmadi.",
+        "uz_cyrl": "Мурожаатлар топилмади.",
+        "ru": "Обращения не найдены.",
+        "en": "No appeals found.",
+    },
+    "my_appeals.not_found": {
+        "uz_latn": "Bu murojaat topilmadi yoki sizga tegishli emas.",
+        "uz_cyrl": "Бу мурожаат топилмади ёки сизга тегишли эмас.",
+        "ru": "Обращение не найдено или не принадлежит вам.",
+        "en": "This appeal was not found or does not belong to you.",
+    },
+    "my_appeals.no_answer": {
+        "uz_latn": "Hozircha javob berilmagan.",
+        "uz_cyrl": "Ҳозирча жавоб берилмаган.",
+        "ru": "Ответ пока не предоставлен.",
+        "en": "No response has been provided yet.",
+    },
+    "my_appeals.detail": {
+        "uz_latn": "📄 Murojaat tafsilotlari\n\n🆔 Raqam: {appeal_number}\n📅 Sana: {created_at}\n📌 Holat: {status}\n\n📝 Murojaat matni:\n{appeal_text}\n\n💬 Admin javobi:\n{admin_answer}",
+        "uz_cyrl": "📄 Мурожаат тафсилотлари\n\n🆔 Рақам: {appeal_number}\n📅 Сана: {created_at}\n📌 Ҳолат: {status}\n\n📝 Мурожаат матни:\n{appeal_text}\n\n💬 Админ жавоби:\n{admin_answer}",
+        "ru": "📄 Детали обращения\n\n🆔 Номер: {appeal_number}\n📅 Дата: {created_at}\n📌 Статус: {status}\n\n📝 Текст обращения:\n{appeal_text}\n\n💬 Ответ администратора:\n{admin_answer}",
+        "en": "📄 Appeal details\n\n🆔 Number: {appeal_number}\n📅 Date: {created_at}\n📌 Status: {status}\n\n📝 Appeal text:\n{appeal_text}\n\n💬 Administrator response:\n{admin_answer}",
+    },
+    "status.new": {
+        "uz_latn": "Yangi", "uz_cyrl": "Янги", "ru": "Новое", "en": "New",
+    },
+    "status.in_progress": {
+        "uz_latn": "Ko‘rib chiqilmoqda", "uz_cyrl": "Кўриб чиқилмоқда", "ru": "На рассмотрении", "en": "In progress",
+    },
+    "status.waiting_for_user": {
+        "uz_latn": "Foydalanuvchi javobi kutilmoqda", "uz_cyrl": "Фойдаланувчи жавоби кутилмоқда", "ru": "Ожидается ответ пользователя", "en": "Waiting for user",
+    },
+    "status.completed": {
+        "uz_latn": "Yakunlangan", "uz_cyrl": "Якунланган", "ru": "Завершено", "en": "Completed",
+    },
+    "status.rejected": {
+        "uz_latn": "Rad etilgan", "uz_cyrl": "Рад этилган", "ru": "Отклонено", "en": "Rejected",
+    },
+    "settings.title": {
+        "uz_latn": "⚙️ Sozlamalar\n\nKerakli bo‘limni tanlang:",
+        "uz_cyrl": "⚙️ Созламалар\n\nКеракли бўлимни танланг:",
+        "ru": "⚙️ Настройки\n\nВыберите раздел:",
+        "en": "⚙️ Settings\n\nChoose a section:",
+    },
+    "settings.profile": {
+        "uz_latn": "👤 Profil", "uz_cyrl": "👤 Профил", "ru": "👤 Профиль", "en": "👤 Profile",
+    },
+    "settings.language": {
+        "uz_latn": "🌐 Tilni o‘zgartirish", "uz_cyrl": "🌐 Тилни ўзгартириш", "ru": "🌐 Изменить язык", "en": "🌐 Change language",
+    },
+    "settings.phone": {
+        "uz_latn": "📱 Telefon raqamini yangilash", "uz_cyrl": "📱 Телефон рақамини янгилаш", "ru": "📱 Обновить номер телефона", "en": "📱 Update phone number",
+    },
+    "settings.profile_text": {
+        "uz_latn": "👤 Profil\n\nF.I.Sh.: {full_name}\nTelefon: {phone}\nTelefon tasdiqlangan: {verified}\nViloyat: {region}\nTuman/shahar: {district}\nTil: {language}",
+        "uz_cyrl": "👤 Профил\n\nФ.И.Ш.: {full_name}\nТелефон: {phone}\nТелефон тасдиқланган: {verified}\nВилоят: {region}\nТуман/шаҳар: {district}\nТил: {language}",
+        "ru": "👤 Профиль\n\nФ.И.О.: {full_name}\nТелефон: {phone}\nТелефон подтверждён: {verified}\nОбласть: {region}\nРайон/город: {district}\nЯзык: {language}",
+        "en": "👤 Profile\n\nFull name: {full_name}\nPhone: {phone}\nPhone verified: {verified}\nRegion: {region}\nDistrict/city: {district}\nLanguage: {language}",
+    },
+    "settings.yes": {
+        "uz_latn": "Ha", "uz_cyrl": "Ҳа", "ru": "Да", "en": "Yes",
+    },
+    "settings.no": {
+        "uz_latn": "Yo‘q", "uz_cyrl": "Йўқ", "ru": "Нет", "en": "No",
+    },
+    "settings.profile_not_found": {
+        "uz_latn": "Profil topilmadi. /start orqali qayta kiring.",
+        "uz_cyrl": "Профил топилмади. /start орқали қайта киринг.",
+        "ru": "Профиль не найден. Запустите /start повторно.",
+        "en": "Profile not found. Please run /start again.",
+    },
+    "settings.language_choose": {
+        "uz_latn": "🌐 Yangi tilni tanlang:",
+        "uz_cyrl": "🌐 Янги тилни танланг:",
+        "ru": "🌐 Выберите новый язык:",
+        "en": "🌐 Choose a new language:",
+    },
+    "settings.language_changed": {
+        "uz_latn": "✅ Til muvaffaqiyatli o‘zgartirildi.",
+        "uz_cyrl": "✅ Тил муваффақиятли ўзгартирилди.",
+        "ru": "✅ Язык успешно изменён.",
+        "en": "✅ Language changed successfully.",
+    },
+    "settings.phone_prompt": {
+        "uz_latn": "📱 Yangi telefon raqamingizni quyidagi tugma orqali yuboring. Faqat o‘zingizning Telegram raqamingiz qabul qilinadi:",
+        "uz_cyrl": "📱 Янги телефон рақамингизни қуйидаги тугма орқали юборинг. Фақат ўзингизнинг Telegram рақамингиз қабул қилинади:",
+        "ru": "📱 Отправьте новый номер кнопкой ниже. Принимается только номер вашего Telegram-аккаунта:",
+        "en": "📱 Share your new number using the button below. Only the number linked to your Telegram account is accepted:",
+    },
+    "settings.phone_changed": {
+        "uz_latn": "✅ Telefon raqamingiz yangilandi va Telegram orqali tasdiqlandi.",
+        "uz_cyrl": "✅ Телефон рақамингиз янгиланди ва Telegram орқали тасдиқланди.",
+        "ru": "✅ Номер телефона обновлён и подтверждён через Telegram.",
+        "en": "✅ Your phone number was updated and verified through Telegram.",
     },
     "faq.intro": {
         "uz_latn": "Kerakli bo‘limni tanlang:",
