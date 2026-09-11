@@ -6,7 +6,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.keyboards import (
     ADMIN_PANEL_CALLBACK_PREFIX,
@@ -56,6 +56,7 @@ from app.services.telegram_delivery import (
 from app.services.delivery_status import DELIVERY_DELIVERED, DELIVERY_FAILED, classify_delivery_exception
 from app.services.user_service import get_user_by_id, mark_user_unreachable
 from app.services.suggestion_service import list_suggestions, review_suggestion, suggestion_counts
+from app.services.web_admin_auth import issue_login_url
 from app.states import AdminStates
 
 logger = logging.getLogger(__name__)
@@ -672,6 +673,21 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
                     f"💡 {html.escape(suggestion.suggestion_number)}",
                     reply_markup=suggestion_review_keyboard(suggestion.id),
                 )
+    elif action == "web":
+        try:
+            url = await issue_login_url(callback.from_user.id)
+        except Exception:
+            logger.exception("Failed to create web admin login URL for %s", callback.from_user.id)
+            await callback.answer("Web panel ҳозирча очилмади. Бироздан сўнг қайта урининг.", show_alert=True)
+            return
+        if callback.message is not None:
+            await callback.message.answer(
+                "🌐 Web admin panelга кириш учун қуйидаги тугмани босинг. "
+                "Ҳавола 5 дақиқа амал қилади ва фақат бир марта ишлайди.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="🌐 Web panelni ochish", url=url)]]
+                ),
+            )
     elif action == "search":
         await state.set_state(AdminStates.waiting_for_search)
         await callback.message.answer("🔎 Мурожаат рақамини киритинг. Масалан: MUR-000123")

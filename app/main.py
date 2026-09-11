@@ -95,12 +95,13 @@ def runtime_components(settings):
     from aiogram.fsm.storage.redis import RedisStorage, RedisEventIsolation
     from aiogram.fsm.storage.base import DefaultKeyBuilder
     from redis.asyncio import Redis
-    from app.services import shared_state
+    from app.services import shared_state, web_admin_auth
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     namespace = f"identifikatsiya:{bot.id}"
     redis = Redis.from_url(settings.redis_url, socket_connect_timeout=3, socket_timeout=3) if settings.redis_url else None
     shared_state.configure(redis, namespace)
+    web_admin_auth.configure(redis, namespace, settings.base_url)
     if redis is None:
         storage, isolation = MemoryStorage(), SimpleEventIsolation()
     else:

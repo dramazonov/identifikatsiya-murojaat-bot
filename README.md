@@ -80,3 +80,22 @@ HTTPS validation are still required on the VPS before cutover.
 - Removing a dynamic admin also releases their unfinished appeal/admin-contact claim so work is not stranded.
 - Citizen appeal flow is intentionally short: direction → appeal text → optional PDF → confirmation. No separate subject is requested.
 - New appeal submissions accept PDF only (up to 20 MB); old photo attachments remain displayable for historical records.
+
+## Stage 25 — Web Admin Panel
+
+Production webhook mode now also exposes a protected web admin UI under `/admin/`.
+Admins do not use a separate password: open Telegram `/admin`, choose `🌐 Web panel`,
+and use the one-time 5-minute login link. The link is single-use; the resulting
+HttpOnly/Secure/SameSite session is stored in Redis and re-checks the admin role on
+every request.
+
+Web panel v1 includes:
+- Dashboard KPIs and recent appeals.
+- Appeal search/filter/detail, atomic claim/release, replies and protected PDF viewing.
+- User directory (read-only).
+- Suggestions for SUPERADMIN only, with one-step `Reviewed` action.
+- Dynamic ADMIN/SUPERADMIN management for SUPERADMIN only; ROOT env superadmins stay protected.
+- Basic category and region statistics.
+
+All state-changing web actions use CSRF tokens. Telegram admin functionality remains
+available in parallel and shares the same database claim/review rules.

@@ -195,6 +195,7 @@ def admin_panel_keyboard(*, superadmin: bool) -> InlineKeyboardMarkup:
         builder.row(InlineKeyboardButton(text="👥 Админлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:admins"))
     builder.row(InlineKeyboardButton(text="🔎 Қидириш", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:search"))
     builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:stats"))
+    builder.row(InlineKeyboardButton(text="🌐 Web panel", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:web"))
     return builder.as_markup()
 
 
