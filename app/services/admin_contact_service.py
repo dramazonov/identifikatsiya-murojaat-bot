@@ -107,13 +107,19 @@ async def claim_admin_contact(contact_id: int, admin_id: int) -> tuple[AdminCont
 
 
 async def complete_admin_contact(
-    contact_id: int, admin_id: int, admin_answer: str
+    contact_id: int,
+    admin_id: int,
+    admin_answer: str,
+    *,
+    delivery_status: str | None = None,
+    delivery_error_code: str | None = None,
 ) -> AdminContact | None:
     """Record the admin's answer and mark the contact message COMPLETED.
 
-    Callers must only call this AFTER the answer has been successfully
-    delivered to the citizen -- this function itself does no delivery, only
-    persistence. Returns None if no contact with this id exists.
+    Persists the admin answer regardless of Telegram delivery outcome. Delivery
+    status/error are recorded separately so a blocked/deleted/unreachable account
+    never causes the official answer to be lost. Returns None if the contact does
+    not exist.
     """
     now = utcnow()
 
@@ -129,6 +135,9 @@ async def complete_admin_contact(
             contact.admin_id = admin_id
             contact.admin_answer = admin_answer
             contact.answered_at = now
+            contact.delivery_status = delivery_status
+            contact.delivery_attempted_at = now if delivery_status else None
+            contact.delivery_error_code = delivery_error_code
             contact.updated_at = now
 
         return contact

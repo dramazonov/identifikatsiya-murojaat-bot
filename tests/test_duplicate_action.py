@@ -26,9 +26,14 @@ class FakeBot:
 class FakeState:
     def __init__(self) -> None:
         self.clear_calls = 0
+        self.data: dict = {}
+
+    async def get_data(self) -> dict:
+        return dict(self.data)
 
     async def clear(self) -> None:
         self.clear_calls += 1
+        self.data.clear()
 
 
 def _make_message(telegram_id: int, message_id: int, text: str):

@@ -159,7 +159,7 @@ _SAFE_MESSAGES = frozenset({
     "Temporary DATABASE_URL is required",
     "Use the direct Neon PostgreSQL endpoint",
     "Engine does not match the explicit PostgreSQL URL",
-    "Local migration head differs from b9a1e47cb84b",
+    "Local migration head differs from d7c2f4189a6e",
     "Connection check failed", "TLS is required", "Expected public schema",
     "Database is not empty; bootstrap refused", "Unexpected baseline revision",
     "Missing tables", "Missing unique constraint", "Missing or incorrect unique index",
@@ -282,14 +282,14 @@ async def run(*, resume_validation=False):
                 from alembic.script import ScriptDirectory
                 from app.migrate import migrate
                 cfg = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
-                if ScriptDirectory.from_config(cfg).get_heads() != ["b9a1e47cb84b"]:
-                    raise RuntimeError("Local migration head differs from b9a1e47cb84b")
+                if ScriptDirectory.from_config(cfg).get_heads() != ["d7c2f4189a6e"]:
+                    raise RuntimeError("Local migration head differs from d7c2f4189a6e")
                 await migrate()
         with stage(4):
             from app.database import verify_schema
             await verify_schema()
             async with engine.connect() as conn:
-                if (await conn.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one() != "b9a1e47cb84b":
+                if (await conn.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one() != "d7c2f4189a6e":
                     raise RuntimeError("Unexpected baseline revision")
         with stage(5):
             from scripts.validate_postgres import inspect_schema

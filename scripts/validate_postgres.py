@@ -16,7 +16,12 @@ from app.models import AdminContact, Appeal, Suggestion, User
 from app.services.admin_contact_service import create_admin_contact, claim_admin_contact
 from app.services.appeal_service import create_appeal, claim_appeal
 from app.services.suggestion_service import create_suggestion
-from app.services.user_service import save_user, save_user_location, get_user_by_telegram_id
+from app.services.user_service import (
+    PHONE_VERIFICATION_SOURCE_TELEGRAM,
+    get_user_by_telegram_id,
+    save_user,
+    save_user_location,
+)
 
 
 def require(condition, message):
@@ -62,9 +67,9 @@ async def validate():
     async with engine.connect() as connection:
         await connection.run_sync(inspect_schema)
         require((await connection.exec_driver_sql("SELECT version_num FROM alembic_version")).scalar_one()
-                == "b9a1e47cb84b", "Unexpected baseline revision")
+                == "d7c2f4189a6e", "Unexpected baseline revision")
         require((await connection.exec_driver_sql("SHOW timezone")).scalar_one() == "UTC", "Non-UTC session")
-    print("PASS: revision b9a1e47cb84b, tables, indexes, unique constraints, foreign keys, schema and UTC")
+    print("PASS: revision d7c2f4189a6e, tables, indexes, unique constraints, foreign keys, schema and UTC")
     await validate_services()
 
 
@@ -95,13 +100,29 @@ async def validate_services(*, cleanup_tasks=None):
     for model, _, _ in models:
         event.listen(model, "before_insert", check_placeholder)
     try:
-        user = await save_user(ids[0], tag, tag, "+998900000000")
-        updated = await save_user(ids[0], tag, "Updated validation", "+998900000001")
+        user = await save_user(
+            ids[0], tag, tag, "+998900000000",
+            phone_verified=True,
+            phone_verification_source=PHONE_VERIFICATION_SOURCE_TELEGRAM,
+            language_code="en",
+        )
+        updated = await save_user(
+            ids[0], tag, "Updated validation", "+998900000001",
+            phone_verified=True,
+            phone_verification_source=PHONE_VERIFICATION_SOURCE_TELEGRAM,
+            language_code="en",
+        )
         require(updated.id == user.id and updated.phone == "+998900000001", "User update failed")
         await save_user_location(ids[0], "Test region", "Test district")
-        await save_user(ids[0], tag, tag, "+998900000002")
+        await save_user(
+            ids[0], tag, tag, "+998900000002",
+            phone_verified=True,
+            phone_verification_source=PHONE_VERIFICATION_SOURCE_TELEGRAM,
+            language_code="en",
+        )
         current = await get_user_by_telegram_id(ids[0])
         require((current.region, current.district) == ("Test region", "Test district"), "Location lost")
+        require(current.phone_verified and current.language_code == "en", "Verification/language lost")
         await settled(*(save_user(ids[1], tag, tag, "+998900000003") for _ in range(12)))
         await settled(*(save_user_location(ids[1], "R", "D") for _ in range(8)))
         require((await get_user_by_telegram_id(ids[1])).full_name == tag, "Profile lost")

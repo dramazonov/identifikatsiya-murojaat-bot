@@ -43,7 +43,7 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
             elif "SELECT EXISTS" in query:
                 value = occupied
             elif "alembic_version" in query:
-                value = "b9a1e47cb84b"
+                value = "d7c2f4189a6e"
             elif "SHOW timezone" in query:
                 value = "UTC"
             else:
@@ -78,7 +78,7 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         engine.connect.return_value.__aexit__ = AsyncMock(return_value=False)
         engine.dispose = AsyncMock()
         scripts = MagicMock()
-        scripts.from_config.return_value.get_heads.return_value = ["b9a1e47cb84b"]
+        scripts.from_config.return_value.get_heads.return_value = ["d7c2f4189a6e"]
         modules = {
             "app.database": types.SimpleNamespace(engine=engine, verify_schema=verify),
             "app.migrate": types.SimpleNamespace(migrate=migrate),
@@ -209,6 +209,7 @@ class CleanupTests(unittest.IsolatedAsyncioTestCase):
                     Appeal=MagicMock(), Suggestion=MagicMock(), AdminContact=MagicMock(),
                     User=MagicMock(), event=event, select=MagicMock(), delete=MagicMock(),
                     require=lambda condition, message: self.assertTrue(condition, message),
+                    PHONE_VERIFICATION_SOURCE_TELEGRAM="TELEGRAM_CONTACT",
                     save_user=AsyncMock(side_effect=RuntimeError("Injected failure")),
                 )
                 exec(compile(ast.Module(body=[function], type_ignores=[]), "validate_services", "exec"), namespace)

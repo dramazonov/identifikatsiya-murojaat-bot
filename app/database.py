@@ -103,6 +103,7 @@ async def init_db() -> None:
     if engine.dialect.name == "sqlite":
         await _migrate_users_table()
         await _migrate_appeals_table()
+        await _migrate_admin_contacts_table()
 
 
 async def verify_schema() -> None:
@@ -136,6 +137,37 @@ async def _migrate_users_table() -> None:
         if "district" not in existing_columns:
             await conn.exec_driver_sql("ALTER TABLE users ADD COLUMN district VARCHAR(255)")
 
+        if "language_code" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN language_code VARCHAR(16) NOT NULL DEFAULT 'uz_cyrl'"
+            )
+
+        if "phone_verified" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN phone_verified BOOLEAN NOT NULL DEFAULT 0"
+            )
+
+        if "phone_verification_source" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN phone_verification_source VARCHAR(32)"
+            )
+
+        if "phone_verified_at" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN phone_verified_at DATETIME"
+            )
+
+        if "telegram_status" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN telegram_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'"
+            )
+
+        if "last_seen_at" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE users ADD COLUMN last_seen_at DATETIME")
+
+        if "unreachable_at" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE users ADD COLUMN unreachable_at DATETIME")
+
 
 async def _migrate_appeals_table() -> None:
     """Safely add the Stage 5 admin-reply columns to an already-existing ``appeals`` table.
@@ -156,3 +188,32 @@ async def _migrate_appeals_table() -> None:
 
         if "answered_at" not in existing_columns:
             await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN answered_at DATETIME")
+
+        if "delivery_status" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN delivery_status VARCHAR(20)")
+
+        if "delivery_attempted_at" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN delivery_attempted_at DATETIME")
+
+        if "delivery_error_code" not in existing_columns:
+            await conn.exec_driver_sql("ALTER TABLE appeals ADD COLUMN delivery_error_code VARCHAR(64)")
+
+
+async def _migrate_admin_contacts_table() -> None:
+    """Add delivery bookkeeping columns to legacy SQLite admin_contacts."""
+    async with engine.begin() as conn:
+        result = await conn.exec_driver_sql("PRAGMA table_info(admin_contacts)")
+        existing_columns = {row[1] for row in result.fetchall()}
+
+        if "delivery_status" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE admin_contacts ADD COLUMN delivery_status VARCHAR(20)"
+            )
+        if "delivery_attempted_at" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE admin_contacts ADD COLUMN delivery_attempted_at DATETIME"
+            )
+        if "delivery_error_code" not in existing_columns:
+            await conn.exec_driver_sql(
+                "ALTER TABLE admin_contacts ADD COLUMN delivery_error_code VARCHAR(64)"
+            )

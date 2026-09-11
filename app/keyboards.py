@@ -12,43 +12,59 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.data.documents import DOCUMENTS, get_document
 from app.data.faq import FAQ_CATEGORIES, get_category
 from app.data.regions import DISTRICTS, REGIONS
+from app.i18n import DEFAULT_LANGUAGE, LANGUAGE_LABELS, SUPPORTED_LANGUAGES, all_texts, t
 
-CONTACT_BUTTON_TEXT = "📱 Телефон рақамини юбориш"
+LANGUAGE_CALLBACK_PREFIX = "lang"
+CONTACT_BUTTON_TEXT = t("button.share_phone", DEFAULT_LANGUAGE)
 REGION_CALLBACK_PREFIX = "region"
 DISTRICT_CALLBACK_PREFIX = "district"
 APPEAL_REPLY_CALLBACK_PREFIX = "appeal_reply"
 ADMIN_CONTACT_REPLY_CALLBACK_PREFIX = "admin_contact_reply"
 REPLY_BUTTON_TEXT = "✍️ Жавоб бериш"
 
-# --- Main menu -------------------------------------------------------------
-
-MENU_FAQ = "❓ Тайёр савол-жавоблар"
-MENU_APPEAL = "📨 Мурожаат юбориш"
-MENU_SUGGESTION = "💡 Таклиф юбориш"
-MENU_DOCUMENTS = "📚 Қарор, қонун ва расмий ҳужжатлар билан танишиш"
-MENU_ADMIN_CONTACT = "👨‍💼 Админ билан боғланиш"
-
-# --- FAQ ---------------------------------------------------------------
+# Backward-compatible default labels used by older imports/tests. Handlers now
+# match every translated variant via menu_texts().
+MENU_FAQ = t("menu.faq", DEFAULT_LANGUAGE)
+MENU_APPEAL = t("menu.appeal", DEFAULT_LANGUAGE)
+MENU_SUGGESTION = t("menu.suggestion", DEFAULT_LANGUAGE)
+MENU_DOCUMENTS = t("menu.documents", DEFAULT_LANGUAGE)
+MENU_ADMIN_CONTACT = t("menu.admin_contact", DEFAULT_LANGUAGE)
 
 FAQ_CATEGORY_CALLBACK_PREFIX = "faq_cat"
 FAQ_QUESTION_CALLBACK_PREFIX = "faq_q"
 FAQ_BACK_CALLBACK = "faq_back"
 FAQ_HOME_CALLBACK = "faq_home"
-BACK_BUTTON_TEXT = "⬅️ Орқага"
-HOME_BUTTON_TEXT = "🏠 Асосий меню"
-
-# --- Documents (📚 Расмий ҳужжатлар) ----------------------------------------
+BACK_BUTTON_TEXT = t("button.back", DEFAULT_LANGUAGE)
+HOME_BUTTON_TEXT = t("button.home", DEFAULT_LANGUAGE)
 
 DOCUMENT_CALLBACK_PREFIX = "doc"
 DOCUMENTS_BACK_CALLBACK = "doc_back"
 DOCUMENTS_HOME_CALLBACK = "doc_home"
-SOURCE_BUTTON_TEXT = "🔗 Расмий манба"
+SOURCE_BUTTON_TEXT = t("button.official_source", DEFAULT_LANGUAGE)
 
 
-def contact_keyboard() -> ReplyKeyboardMarkup:
+def menu_texts(key: str) -> tuple[str, ...]:
+    return all_texts(f"menu.{key}")
+
+
+def language_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for language_code in SUPPORTED_LANGUAGES:
+        builder.button(
+            text=LANGUAGE_LABELS[language_code],
+            callback_data=f"{LANGUAGE_CALLBACK_PREFIX}:{language_code}",
+        )
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def contact_keyboard(language_code: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=CONTACT_BUTTON_TEXT, request_contact=True)]],
+        keyboard=[[
+            KeyboardButton(text=t("button.share_phone", language_code), request_contact=True)
+        ]],
         resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 
@@ -90,18 +106,26 @@ def admin_contact_reply_keyboard(contact_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
+def main_menu_keyboard(language_code: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=MENU_FAQ), KeyboardButton(text=MENU_APPEAL)],
-            [KeyboardButton(text=MENU_SUGGESTION), KeyboardButton(text=MENU_DOCUMENTS)],
-            [KeyboardButton(text=MENU_ADMIN_CONTACT)],
+            [
+                KeyboardButton(text=t("menu.faq", language_code)),
+                KeyboardButton(text=t("menu.appeal", language_code)),
+            ],
+            [
+                KeyboardButton(text=t("menu.suggestion", language_code)),
+                KeyboardButton(text=t("menu.documents", language_code)),
+            ],
+            [KeyboardButton(text=t("menu.admin_contact", language_code))],
         ],
         resize_keyboard=True,
     )
 
 
-def faq_categories_keyboard() -> InlineKeyboardMarkup:
+def faq_categories_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
+    # FAQ legal/knowledge-base content remains the official Uzbek-Cyrillic
+    # source in Stage 18A; Stage 18B will translate the knowledge-base itself.
     builder = InlineKeyboardBuilder()
     for category in FAQ_CATEGORIES:
         builder.button(
@@ -111,10 +135,9 @@ def faq_categories_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def faq_questions_keyboard(category_id: str) -> InlineKeyboardMarkup:
+def faq_questions_keyboard(category_id: str, language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     category = get_category(category_id)
-
     if category is not None:
         for index, question in enumerate(category["questions"]):
             builder.button(
@@ -123,13 +146,16 @@ def faq_questions_keyboard(category_id: str) -> InlineKeyboardMarkup:
             )
     builder.adjust(1)
     builder.row(
-        InlineKeyboardButton(text=BACK_BUTTON_TEXT, callback_data=FAQ_BACK_CALLBACK),
-        InlineKeyboardButton(text=HOME_BUTTON_TEXT, callback_data=FAQ_HOME_CALLBACK),
+        InlineKeyboardButton(text=t("button.back", language_code), callback_data=FAQ_BACK_CALLBACK),
+        InlineKeyboardButton(text=t("button.home", language_code), callback_data=FAQ_HOME_CALLBACK),
     )
     return builder.as_markup()
 
 
-def faq_answer_keyboard(related_document_ids: list[str] | None = None) -> InlineKeyboardMarkup:
+def faq_answer_keyboard(
+    related_document_ids: list[str] | None = None,
+    language_code: str = DEFAULT_LANGUAGE,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for document_id in related_document_ids or []:
         document = get_document(document_id)
@@ -140,8 +166,8 @@ def faq_answer_keyboard(related_document_ids: list[str] | None = None) -> Inline
             )
     builder.adjust(1)
     builder.row(
-        InlineKeyboardButton(text=BACK_BUTTON_TEXT, callback_data=FAQ_BACK_CALLBACK),
-        InlineKeyboardButton(text=HOME_BUTTON_TEXT, callback_data=FAQ_HOME_CALLBACK),
+        InlineKeyboardButton(text=t("button.back", language_code), callback_data=FAQ_BACK_CALLBACK),
+        InlineKeyboardButton(text=t("button.home", language_code), callback_data=FAQ_HOME_CALLBACK),
     )
     return builder.as_markup()
 
@@ -157,13 +183,21 @@ def documents_list_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def document_detail_keyboard(document: dict) -> InlineKeyboardMarkup:
+def document_detail_keyboard(
+    document: dict, language_code: str = DEFAULT_LANGUAGE
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     source_url = document.get("source_url")
     if source_url:
-        builder.row(InlineKeyboardButton(text=SOURCE_BUTTON_TEXT, url=source_url))
+        builder.row(
+            InlineKeyboardButton(text=t("button.official_source", language_code), url=source_url)
+        )
     builder.row(
-        InlineKeyboardButton(text=BACK_BUTTON_TEXT, callback_data=DOCUMENTS_BACK_CALLBACK),
-        InlineKeyboardButton(text=HOME_BUTTON_TEXT, callback_data=DOCUMENTS_HOME_CALLBACK),
+        InlineKeyboardButton(
+            text=t("button.back", language_code), callback_data=DOCUMENTS_BACK_CALLBACK
+        ),
+        InlineKeyboardButton(
+            text=t("button.home", language_code), callback_data=DOCUMENTS_HOME_CALLBACK
+        ),
     )
     return builder.as_markup()

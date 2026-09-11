@@ -9,12 +9,14 @@ from aiogram.types import CallbackQuery, Message
 
 from app.data.regions import DISTRICTS, REGIONS
 from app.handlers.admin import notify_admins_new_appeal, notify_admins_new_suggestion
+from app.i18n import DEFAULT_LANGUAGE, normalize_language, t
 from app.keyboards import (
-    MENU_APPEAL,
-    MENU_SUGGESTION,
+    LANGUAGE_CALLBACK_PREFIX,
     contact_keyboard,
     district_keyboard,
+    language_keyboard,
     main_menu_keyboard,
+    menu_texts,
     region_keyboard,
     remove_keyboard,
 )
@@ -22,10 +24,14 @@ from app.services.appeal_service import create_appeal
 from app.services.shared_state import acquire_submission, finish_submission, is_rate_limited
 from app.services.suggestion_service import create_suggestion
 from app.services.user_service import (
+    PHONE_VERIFICATION_SOURCE_TELEGRAM,
     get_user_by_id,
     get_user_by_telegram_id,
+    get_user_language,
+    is_registration_complete,
     save_user,
     save_user_location,
+    set_user_language,
 )
 from app.services.validators import (
     is_valid_appeal_text,
@@ -36,250 +42,300 @@ from app.services.validators import (
 from app.states import Registration, SuggestionStates
 
 logger = logging.getLogger(__name__)
-
 router = Router()
 
-# Tracks, across the shared registration flow (full name -> phone -> region ->
-# district), what the user was registering *for* -- so that once the flow
-# finishes, they land on the right next step (appeal or suggestion text)
-# instead of always landing on the appeal step. Stored under the "intent" key
-# in FSM data; missing/unset defaults to INTENT_APPEAL to preserve the
-# pre-existing behavior of /start and the "📨 Мурожаат юбориш" button.
 INTENT_APPEAL = "appeal"
 INTENT_SUGGESTION = "suggestion"
-
-WELCOME_TEXT = (
-    "Assalomu alaykum!\n\n"
-    "Identifikatsiya markazining murojaatlar botiga xush kelibsiz.\n\n"
-    "Илтимос, Ф.И.Ш.ингизни киритинг:"
-)
-WELCOME_BACK_TEXT = "🏠 АСОСИЙ МЕНЮ\n\nКеракли бўлимни танланг:"
-INVALID_FULL_NAME_TEXT = "Илтимос, тўлиқ исм-фамилиянгизни киритинг (камида 5 та белги)."
-ASK_PHONE_TEXT = "Телефон рақамингизни юборинг:"
-INVALID_PHONE_TEXT = (
-    "Телефон рақами нотўғри форматда. Илтимос, қайта киритинг ёки тугма орқали юборинг."
-)
-PHONE_ACCEPTED_TEXT = "✅ Телефон рақами қабул қилинди."
-ASK_REGION_TEXT = "Вилоятингизни танланг:"
-INVALID_REGION_TEXT = "Илтимос, вилоятни тугмалар орқали танланг:"
-ASK_DISTRICT_TEXT = "Туман ёки шаҳарни танланг:"
-INVALID_DISTRICT_TEXT = "Илтимос, туман ёки шаҳарни тугмалар орқали танланг:"
-LOCATION_SUCCESS_TEXT = "Ҳудуд маълумотлари қабул қилинди."
-ASK_APPEAL_TEXT = "Мурожаатингизни ёзинг:"
-INVALID_APPEAL_TEXT = (
-    "Мурожаат матни нотўғри. Илтимос, камида 5, кўпи билан 4000 та белгидан "
-    "иборат матн киритинг."
-)
-APPEAL_SUCCESS_TEXT_TEMPLATE = (
-    "Мурожаатингиз қабул қилинди.\n\n"
-    "Мурожаат рақами: {appeal_number}\n\n"
-    "Мурожаатингиз масъул ходимлар томонидан кўриб чиқилади."
-)
-ASK_SUGGESTION_TEXT = "Таклифингизни ёзинг:"
-INVALID_SUGGESTION_TEXT = (
-    "Таклиф матни нотўғри. Илтимос, камида 5, кўпи билан 4000 та белгидан "
-    "иборат матн киритинг."
-)
-SUGGESTION_SUCCESS_TEXT_TEMPLATE = (
-    "✅ Таклифингиз қабул қилинди.\n\n"
-    "Таклиф рақами: {suggestion_number}"
-)
-GENERIC_ERROR_TEXT = "Хатолик юз берди. Илтимос, бироздан сўнг қайта уриниб кўринг."
-CALLBACK_ERROR_TEXT = "Хатолик юз берди. Илтимос, /start орқали қайта бошланг."
-RATE_LIMITED_TEXT = (
-    "⏳ Сиз жуда тез-тез юбормоқдасиз. Илтимос, бир оз кутиб қайта уриниб кўринг."
-)
-
-# MVP audit MEDIUM #8 / instruction #7: cap how many appeals/suggestions a
-# single citizen can submit in a short window, so accidental or careless
-# rapid-fire re-sends can't spam every admin. Deliberately generous (well
-# above any plausible normal-use rate) so it never blocks a genuine user --
-# see app/services/rate_limit.py for the (Redis-swappable) backend.
 RATE_LIMIT_MAX_SUBMISSIONS = 3
 RATE_LIMIT_WINDOW_SECONDS = 60.0
 
 
+def _lang_from_data(data: dict) -> str:
+    return normalize_language(data.get("language_code"))
+
+
+async def _language_for_user(telegram_id: int, state: FSMContext | None = None) -> str:
+    if state is not None:
+        data = await state.get_data()
+        if data.get("language_code"):
+            return _lang_from_data(data)
+    return await get_user_language(telegram_id)
+
+
+async def _route_incomplete_registration(
+    message: Message,
+    state: FSMContext,
+    *,
+    language_code: str,
+    telegram_id: int,
+    intent: str | None = None,
+) -> None:
+    user = await get_user_by_telegram_id(telegram_id)
+    await state.update_data(language_code=language_code)
+    if intent:
+        await state.update_data(intent=intent)
+
+    if user is None or not user.full_name:
+        await state.set_state(Registration.waiting_for_full_name)
+        await message.answer(t("registration.ask_full_name", language_code), reply_markup=remove_keyboard())
+        return
+
+    if not user.phone or not user.phone_verified:
+        await state.set_state(Registration.waiting_for_phone)
+        await message.answer(
+            t("registration.ask_phone", language_code),
+            reply_markup=contact_keyboard(language_code),
+        )
+        return
+
+    if not user.region or not user.district:
+        await state.set_state(Registration.waiting_for_region)
+        await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard())
+        return
+
+    await _finish_registration_flow(message, state, language_code=language_code, intent=intent)
+
+
+async def _finish_registration_flow(
+    message: Message,
+    state: FSMContext,
+    *,
+    language_code: str,
+    intent: str | None = None,
+) -> None:
+    if intent == INTENT_SUGGESTION:
+        await state.set_state(SuggestionStates.waiting_for_suggestion)
+        await message.answer(t("suggestion.ask", language_code), reply_markup=remove_keyboard())
+        return
+
+    await state.clear()
+    await message.answer(t("menu.title", language_code), reply_markup=main_menu_keyboard(language_code))
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
-    # Telegram can retry the exact same webhook update when a free hosting
-    # instance is cold-starting. A duplicate /start must never clear a state
-    # that has already advanced to phone/region/etc. The lease is keyed by
-    # chat_id + message_id, so a genuinely new /start still works normally.
     submission_key = f"start:{message.chat.id}:{message.message_id}"
     submission_token = await acquire_submission(submission_key)
     if submission_token is None:
-        logger.info(
-            "Ignoring duplicate delivery of /start message %s in chat %s",
-            message.message_id,
-            message.chat.id,
-        )
+        logger.info("Ignoring duplicate delivery of /start message %s", message.message_id)
         return
 
     succeeded = False
     try:
         await state.clear()
-
-        user = await get_user_by_telegram_id(message.from_user.id)
-        if user is not None:
-            await message.answer(WELCOME_BACK_TEXT, reply_markup=main_menu_keyboard())
-            succeeded = True
-            return
-
-        # New user: keep the existing registration flow unchanged.
-        await state.set_state(Registration.waiting_for_full_name)
-        await message.answer(WELCOME_TEXT)
+        await state.set_state(Registration.waiting_for_language)
+        await message.answer(
+            t("language.choose", DEFAULT_LANGUAGE),
+            reply_markup=language_keyboard(),
+        )
         succeeded = True
     finally:
-        await finish_submission(
-            submission_key,
-            submission_token,
-            failed=not succeeded,
-        )
+        await finish_submission(submission_key, submission_token, failed=not succeeded)
 
 
-@router.message(F.text == MENU_APPEAL)
+@router.callback_query(F.data.startswith(f"{LANGUAGE_CALLBACK_PREFIX}:"))
+async def process_language_selected(callback: CallbackQuery, state: FSMContext) -> None:
+    language_code = normalize_language(callback.data.split(":", 1)[1] if ":" in callback.data else None)
+    if callback.data != f"{LANGUAGE_CALLBACK_PREFIX}:{language_code}":
+        await callback.answer("Invalid language", show_alert=True)
+        return
+
+    user = await set_user_language(
+        callback.from_user.id,
+        callback.from_user.username,
+        language_code,
+    )
+    await state.clear()
+    await state.update_data(language_code=language_code)
+
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("Could not clear language keyboard", exc_info=True)
+
+        if is_registration_complete(user):
+            await state.clear()
+            await callback.message.answer(
+                t("menu.title", language_code), reply_markup=main_menu_keyboard(language_code)
+            )
+        else:
+            await _route_incomplete_registration(
+                callback.message,
+                state,
+                language_code=language_code,
+                telegram_id=callback.from_user.id,
+            )
+    await callback.answer()
+
+
+@router.message(F.text.in_(menu_texts("appeal")))
 async def menu_start_appeal(message: Message, state: FSMContext) -> None:
-    # Reachable from any FSM state -- registered before the state-specific
-    # catch-alls below so pressing this button always takes priority.
     await state.clear()
-
+    language_code = await get_user_language(message.from_user.id)
     user = await get_user_by_telegram_id(message.from_user.id)
-    if user is not None and user.full_name and user.phone and user.region and user.district:
-        # Already registered: go straight to composing the appeal, no need
-        # to re-ask Ф.И.Ш./phone/region/district.
+    if is_registration_complete(user):
+        await state.update_data(language_code=language_code)
         await state.set_state(Registration.waiting_for_appeal)
-        # The main menu's ReplyKeyboard must not linger while composing --
-        # see remove_keyboard()'s other callers for why this needs an
-        # explicit ReplyKeyboardRemove rather than just omitting reply_markup.
-        await message.answer(ASK_APPEAL_TEXT, reply_markup=remove_keyboard())
+        await message.answer(t("appeal.ask", language_code), reply_markup=remove_keyboard())
         return
 
-    await state.set_state(Registration.waiting_for_full_name)
-    await message.answer(WELCOME_TEXT, reply_markup=remove_keyboard())
+    await _route_incomplete_registration(
+        message,
+        state,
+        language_code=language_code,
+        telegram_id=message.from_user.id,
+        intent=INTENT_APPEAL,
+    )
 
 
-@router.message(F.text == MENU_SUGGESTION)
+@router.message(F.text.in_(menu_texts("suggestion")))
 async def menu_start_suggestion(message: Message, state: FSMContext) -> None:
-    # Reachable from any FSM state -- registered before the state-specific
-    # catch-alls below so pressing this button always takes priority.
     await state.clear()
-
+    language_code = await get_user_language(message.from_user.id)
     user = await get_user_by_telegram_id(message.from_user.id)
-    if user is not None and user.full_name and user.phone and user.region and user.district:
-        # Already registered: go straight to composing the suggestion, no need
-        # to re-ask Ф.И.Ш./phone/region/district.
+    if is_registration_complete(user):
+        await state.update_data(language_code=language_code)
         await state.set_state(SuggestionStates.waiting_for_suggestion)
-        # The main menu's ReplyKeyboard must not linger while composing --
-        # see remove_keyboard()'s other callers for why this needs an
-        # explicit ReplyKeyboardRemove rather than just omitting reply_markup.
-        await message.answer(ASK_SUGGESTION_TEXT, reply_markup=remove_keyboard())
+        await message.answer(t("suggestion.ask", language_code), reply_markup=remove_keyboard())
         return
 
-    await state.update_data(intent=INTENT_SUGGESTION)
-    await state.set_state(Registration.waiting_for_full_name)
-    await message.answer(WELCOME_TEXT, reply_markup=remove_keyboard())
+    await _route_incomplete_registration(
+        message,
+        state,
+        language_code=language_code,
+        telegram_id=message.from_user.id,
+        intent=INTENT_SUGGESTION,
+    )
 
 
 @router.message(Registration.waiting_for_full_name, F.text)
 async def process_full_name(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
     full_name = message.text.strip()
-
     if not is_valid_full_name(full_name):
-        await message.answer(INVALID_FULL_NAME_TEXT)
+        await message.answer(t("registration.invalid_full_name", language_code))
         return
 
-    await state.update_data(full_name=full_name)
+    await state.update_data(full_name=full_name, language_code=language_code)
     await state.set_state(Registration.waiting_for_phone)
-    await message.answer(ASK_PHONE_TEXT, reply_markup=contact_keyboard())
+    await message.answer(t("registration.ask_phone", language_code), reply_markup=contact_keyboard(language_code))
 
 
 @router.message(Registration.waiting_for_full_name)
-async def process_full_name_invalid(message: Message) -> None:
-    await message.answer(INVALID_FULL_NAME_TEXT)
+async def process_full_name_invalid(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
+    await message.answer(t("registration.invalid_full_name", language_code))
 
 
 @router.message(Registration.waiting_for_phone, F.contact)
 async def process_phone_contact(message: Message, state: FSMContext) -> None:
-    phone = normalize_phone(message.contact.phone_number)
-
-    if phone is None:
-        await message.answer(INVALID_PHONE_TEXT, reply_markup=contact_keyboard())
+    language_code = await _language_for_user(message.from_user.id, state)
+    contact = message.contact
+    if contact.user_id is None or contact.user_id != message.from_user.id:
+        await message.answer(
+            t("registration.wrong_contact", language_code),
+            reply_markup=contact_keyboard(language_code),
+        )
         return
 
-    await _finish_registration(message, state, phone)
+    phone = normalize_phone(contact.phone_number)
+    if phone is None:
+        await message.answer(
+            t("registration.invalid_phone", language_code),
+            reply_markup=contact_keyboard(language_code),
+        )
+        return
+
+    await _finish_verified_phone(message, state, phone, language_code)
 
 
 @router.message(Registration.waiting_for_phone, F.text)
 async def process_phone_text(message: Message, state: FSMContext) -> None:
-    phone = normalize_phone(message.text)
-
-    if phone is None:
-        await message.answer(INVALID_PHONE_TEXT, reply_markup=contact_keyboard())
-        return
-
-    await _finish_registration(message, state, phone)
+    language_code = await _language_for_user(message.from_user.id, state)
+    await message.answer(
+        t("registration.manual_phone_rejected", language_code),
+        reply_markup=contact_keyboard(language_code),
+    )
 
 
 @router.message(Registration.waiting_for_phone)
-async def process_phone_invalid(message: Message) -> None:
-    await message.answer(INVALID_PHONE_TEXT, reply_markup=contact_keyboard())
+async def process_phone_invalid(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
+    await message.answer(
+        t("registration.manual_phone_rejected", language_code),
+        reply_markup=contact_keyboard(language_code),
+    )
 
 
-async def _finish_registration(message: Message, state: FSMContext, phone: str) -> None:
+async def _finish_verified_phone(
+    message: Message, state: FSMContext, phone: str, language_code: str
+) -> None:
     data = await state.get_data()
-    full_name = data.get("full_name", "")
+    existing = await get_user_by_telegram_id(message.from_user.id)
+    full_name = data.get("full_name") or (existing.full_name if existing else None)
+    if not full_name:
+        await state.set_state(Registration.waiting_for_full_name)
+        await message.answer(t("registration.ask_full_name", language_code), reply_markup=remove_keyboard())
+        return
 
     try:
-        await save_user(
+        user = await save_user(
             telegram_id=message.from_user.id,
             telegram_username=message.from_user.username,
             full_name=full_name,
             phone=phone,
+            phone_verified=True,
+            phone_verification_source=PHONE_VERIFICATION_SOURCE_TELEGRAM,
+            language_code=language_code,
         )
     except Exception:
-        logger.exception("Failed to save user %s to the database", message.from_user.id)
-        await message.answer(GENERIC_ERROR_TEXT, reply_markup=contact_keyboard())
+        logger.exception("Failed to save verified phone for user %s", message.from_user.id)
+        await message.answer(t("common.error", language_code), reply_markup=contact_keyboard(language_code))
+        return
+
+    await message.answer(t("registration.phone_accepted", language_code), reply_markup=remove_keyboard())
+    intent = data.get("intent")
+    if user.region and user.district:
+        await _finish_registration_flow(
+            message, state, language_code=language_code, intent=intent
+        )
         return
 
     await state.set_state(Registration.waiting_for_region)
-
-    # Telegram only clears a reply keyboard (the "📱 Телефон рақамини
-    # юбориш" contact button) when a message explicitly carries
-    # ReplyKeyboardRemove -- sending the inline region keyboard on its own
-    # would leave that button lingering on screen. So remove it first, in
-    # its own message, then show the region prompt with its inline keyboard.
-    await message.answer(PHONE_ACCEPTED_TEXT, reply_markup=remove_keyboard())
-    await message.answer(ASK_REGION_TEXT, reply_markup=region_keyboard())
+    await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard())
 
 
 @router.callback_query(Registration.waiting_for_region, F.data.startswith("region:"))
 async def process_region_selected(callback: CallbackQuery, state: FSMContext) -> None:
+    language_code = await _language_for_user(callback.from_user.id, state)
     region_id = _parse_index(callback.data.split(":")[1] if ":" in callback.data else "")
-
     if region_id is None or region_id not in range(len(REGIONS)):
-        await callback.answer(CALLBACK_ERROR_TEXT, show_alert=True)
+        await callback.answer(t("common.error", language_code), show_alert=True)
         return
 
-    region_name = REGIONS[region_id]
-    await state.update_data(region_id=region_id, region_name=region_name)
+    await state.update_data(region_id=region_id, region_name=REGIONS[region_id], language_code=language_code)
     await state.set_state(Registration.waiting_for_district)
-
     if callback.message is not None:
-        await callback.message.edit_text(ASK_DISTRICT_TEXT, reply_markup=district_keyboard(region_id))
+        await callback.message.edit_text(
+            t("registration.ask_district", language_code),
+            reply_markup=district_keyboard(region_id),
+        )
     await callback.answer()
 
 
 @router.message(Registration.waiting_for_region)
-async def process_region_invalid(message: Message) -> None:
-    await message.answer(INVALID_REGION_TEXT, reply_markup=region_keyboard())
+async def process_region_invalid(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
+    await message.answer(t("registration.invalid_region", language_code), reply_markup=region_keyboard())
 
 
 @router.callback_query(Registration.waiting_for_district, F.data.startswith("district:"))
 async def process_district_selected(callback: CallbackQuery, state: FSMContext) -> None:
+    language_code = await _language_for_user(callback.from_user.id, state)
     parts = callback.data.split(":")
     region_id = _parse_index(parts[1]) if len(parts) > 1 else None
     district_id = _parse_index(parts[2]) if len(parts) > 2 else None
-
     data = await state.get_data()
     expected_region_id = data.get("region_id")
 
@@ -290,65 +346,49 @@ async def process_district_selected(callback: CallbackQuery, state: FSMContext) 
         or region_id not in DISTRICTS
         or district_id not in range(len(DISTRICTS[region_id]))
     ):
-        await callback.answer(CALLBACK_ERROR_TEXT, show_alert=True)
+        await callback.answer(t("common.error", language_code), show_alert=True)
         return
-
-    region_name = REGIONS[region_id]
-    district_name = DISTRICTS[region_id][district_id]
 
     try:
         await save_user_location(
             telegram_id=callback.from_user.id,
-            region=region_name,
-            district=district_name,
+            region=REGIONS[region_id],
+            district=DISTRICTS[region_id][district_id],
         )
     except Exception:
         logger.exception("Failed to save location for user %s", callback.from_user.id)
-        await callback.answer(CALLBACK_ERROR_TEXT, show_alert=True)
+        await callback.answer(t("common.error", language_code), show_alert=True)
         return
 
-    # Route to whichever flow started registration: suggestion composing when
-    # the user got here via "💡 Таклиф юбориш" (see INTENT_SUGGESTION,
-    # unchanged). Otherwise -- a brand-new user finishing registration via
-    # /start, or via "📨 Мурожаат юбориш" before ever registering -- land on
-    # the main menu instead of auto-starting the appeal state; the user must
-    # press "📨 Мурожаат юбориш" again to actually begin composing an appeal.
-    intent = data.get("intent", INTENT_APPEAL)
-
-    if intent == INTENT_SUGGESTION:
-        await state.set_state(SuggestionStates.waiting_for_suggestion)
-        if callback.message is not None:
-            await callback.message.edit_text(LOCATION_SUCCESS_TEXT)
-            await callback.message.answer(ASK_SUGGESTION_TEXT)
-    else:
-        await state.clear()
-        if callback.message is not None:
-            await callback.message.edit_text(LOCATION_SUCCESS_TEXT)
-            await callback.message.answer(WELCOME_BACK_TEXT, reply_markup=main_menu_keyboard())
-
+    intent = data.get("intent")
+    if callback.message is not None:
+        await callback.message.edit_text(t("registration.location_saved", language_code))
+        await _finish_registration_flow(
+            callback.message, state, language_code=language_code, intent=intent
+        )
     await callback.answer()
 
 
 @router.message(Registration.waiting_for_district)
 async def process_district_invalid(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
     data = await state.get_data()
     region_id = data.get("region_id")
-
     if region_id not in DISTRICTS:
-        # Defensive fallback: state is inconsistent, restart from the region step.
         await state.set_state(Registration.waiting_for_region)
-        await message.answer(ASK_REGION_TEXT, reply_markup=region_keyboard())
+        await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard())
         return
-
-    await message.answer(INVALID_DISTRICT_TEXT, reply_markup=district_keyboard(region_id))
+    await message.answer(
+        t("registration.invalid_district", language_code), reply_markup=district_keyboard(region_id)
+    )
 
 
 @router.message(Registration.waiting_for_appeal, F.text)
 async def process_appeal_text(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
     appeal_text = message.text.strip()
-
     if not is_valid_appeal_text(appeal_text):
-        await message.answer(INVALID_APPEAL_TEXT)
+        await message.answer(t("appeal.invalid", language_code))
         return
 
     if await is_rate_limited(
@@ -356,67 +396,48 @@ async def process_appeal_text(message: Message, state: FSMContext) -> None:
         limit=RATE_LIMIT_MAX_SUBMISSIONS,
         window_seconds=RATE_LIMIT_WINDOW_SECONDS,
     ):
-        await message.answer(RATE_LIMITED_TEXT)
+        await message.answer(t("common.rate_limited", language_code))
         return
 
-    # Idempotency (MVP audit instruction #4): guards against Telegram
-    # redelivering the same update (message_id is unique per chat, so a
-    # genuinely new message from the user is never mistaken for a duplicate).
     submission_key = f"appeal_create:{message.chat.id}:{message.message_id}"
     submission_token = await acquire_submission(submission_key)
     if submission_token is None:
-        logger.info(
-            "Ignoring duplicate delivery of message %s in chat %s (appeal create)",
-            message.message_id,
-            message.chat.id,
-        )
         return
 
     try:
-        appeal = await create_appeal(
-            telegram_id=message.from_user.id,
-            appeal_text=appeal_text,
-        )
+        appeal = await create_appeal(telegram_id=message.from_user.id, appeal_text=appeal_text)
     except Exception:
         await finish_submission(submission_key, submission_token, failed=True)
         logger.exception("Failed to save appeal for user %s", message.from_user.id)
-        await message.answer(GENERIC_ERROR_TEXT)
+        await message.answer(t("common.error", language_code))
         return
 
     await finish_submission(submission_key, submission_token)
     await state.clear()
     await message.answer(
-        APPEAL_SUCCESS_TEXT_TEMPLATE.format(appeal_number=appeal.appeal_number),
-        reply_markup=main_menu_keyboard(),
+        t("appeal.success", language_code, appeal_number=appeal.appeal_number),
+        reply_markup=main_menu_keyboard(language_code),
     )
-
-    # Notifying admins is best-effort: the citizen has already received their
-    # success message above, so a failure here must never surface to them.
     try:
         appeal_user = await get_user_by_id(appeal.user_id)
         if appeal_user is not None:
             await notify_admins_new_appeal(message.bot, appeal, appeal_user)
-        else:
-            logger.error(
-                "User %s not found while notifying admins about appeal %s",
-                appeal.user_id,
-                appeal.appeal_number,
-            )
     except Exception:
         logger.exception("Failed to notify admins about appeal %s", appeal.appeal_number)
 
 
 @router.message(Registration.waiting_for_appeal)
-async def process_appeal_invalid(message: Message) -> None:
-    await message.answer(INVALID_APPEAL_TEXT)
+async def process_appeal_invalid(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
+    await message.answer(t("appeal.invalid", language_code))
 
 
 @router.message(SuggestionStates.waiting_for_suggestion, F.text)
 async def process_suggestion_text(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
     suggestion_text = message.text.strip()
-
     if not is_valid_suggestion_text(suggestion_text):
-        await message.answer(INVALID_SUGGESTION_TEXT)
+        await message.answer(t("suggestion.invalid", language_code))
         return
 
     if await is_rate_limited(
@@ -424,59 +445,42 @@ async def process_suggestion_text(message: Message, state: FSMContext) -> None:
         limit=RATE_LIMIT_MAX_SUBMISSIONS,
         window_seconds=RATE_LIMIT_WINDOW_SECONDS,
     ):
-        await message.answer(RATE_LIMITED_TEXT)
+        await message.answer(t("common.rate_limited", language_code))
         return
 
-    # Idempotency (MVP audit instruction #4): guards against Telegram
-    # redelivering the same update (message_id is unique per chat, so a
-    # genuinely new message from the user is never mistaken for a duplicate).
     submission_key = f"suggestion_create:{message.chat.id}:{message.message_id}"
     submission_token = await acquire_submission(submission_key)
     if submission_token is None:
-        logger.info(
-            "Ignoring duplicate delivery of message %s in chat %s (suggestion create)",
-            message.message_id,
-            message.chat.id,
-        )
         return
 
     try:
         suggestion = await create_suggestion(
-            telegram_id=message.from_user.id,
-            suggestion_text=suggestion_text,
+            telegram_id=message.from_user.id, suggestion_text=suggestion_text
         )
     except Exception:
         await finish_submission(submission_key, submission_token, failed=True)
         logger.exception("Failed to save suggestion for user %s", message.from_user.id)
-        await message.answer(GENERIC_ERROR_TEXT)
+        await message.answer(t("common.error", language_code))
         return
 
     await finish_submission(submission_key, submission_token)
     await state.clear()
     await message.answer(
-        SUGGESTION_SUCCESS_TEXT_TEMPLATE.format(suggestion_number=suggestion.suggestion_number),
-        reply_markup=main_menu_keyboard(),
+        t("suggestion.success", language_code, suggestion_number=suggestion.suggestion_number),
+        reply_markup=main_menu_keyboard(language_code),
     )
-
-    # Notifying admins is best-effort: the citizen has already received their
-    # success message above, so a failure here must never surface to them.
     try:
         suggestion_user = await get_user_by_id(suggestion.user_id)
         if suggestion_user is not None:
             await notify_admins_new_suggestion(message.bot, suggestion, suggestion_user)
-        else:
-            logger.error(
-                "User %s not found while notifying admins about suggestion %s",
-                suggestion.user_id,
-                suggestion.suggestion_number,
-            )
     except Exception:
         logger.exception("Failed to notify admins about suggestion %s", suggestion.suggestion_number)
 
 
 @router.message(SuggestionStates.waiting_for_suggestion)
-async def process_suggestion_invalid(message: Message) -> None:
-    await message.answer(INVALID_SUGGESTION_TEXT)
+async def process_suggestion_invalid(message: Message, state: FSMContext) -> None:
+    language_code = await _language_for_user(message.from_user.id, state)
+    await message.answer(t("suggestion.invalid", language_code))
 
 
 def _parse_index(raw: str) -> int | None:

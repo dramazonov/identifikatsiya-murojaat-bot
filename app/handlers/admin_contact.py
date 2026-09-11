@@ -8,11 +8,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.config import ADMIN_IDS
+from app.i18n import t
 from app.keyboards import (
     ADMIN_CONTACT_REPLY_CALLBACK_PREFIX,
-    MENU_ADMIN_CONTACT,
     admin_contact_reply_keyboard,
     main_menu_keyboard,
+    menu_texts,
     remove_keyboard,
 )
 from app.models import AdminContact, User
@@ -29,7 +30,8 @@ from app.services.telegram_delivery import (
     safe_edit_message_text,
     send_long_message,
 )
-from app.services.user_service import get_user_by_id
+from app.services.delivery_status import DELIVERY_DELIVERED, DELIVERY_FAILED, classify_delivery_exception
+from app.services.user_service import get_user_by_id, get_user_language, mark_user_unreachable
 from app.services.validators import is_valid_admin_contact_message
 from app.states import AdminContactReplyStates, AdminContactStates
 
@@ -128,7 +130,7 @@ async def notify_admins_new_contact(bot: Bot, contact: AdminContact, user: User 
             )
 
 
-@router.message(F.text == MENU_ADMIN_CONTACT)
+@router.message(F.text.in_(menu_texts("admin_contact")))
 async def menu_admin_contact(message: Message, state: FSMContext) -> None:
     # Reachable from any FSM state -- this router is included before
     # start_router (see app/main.py), so pressing this button always takes
@@ -136,19 +138,19 @@ async def menu_admin_contact(message: Message, state: FSMContext) -> None:
     # exactly like "📨 Мурожаат юбориш"/"💡 Таклиф юбориш" in app/handlers/start.py.
     # No registration required: a brand-new user can contact admins directly.
     await state.clear()
+    language = await get_user_language(message.from_user.id)
+    await state.update_data(language_code=language)
     await state.set_state(AdminContactStates.waiting_for_message)
-    # The main menu's ReplyKeyboard must not linger while composing -- see
-    # remove_keyboard()'s other callers for why this needs an explicit
-    # ReplyKeyboardRemove rather than just omitting reply_markup.
-    await message.answer(ASK_MESSAGE_TEXT, reply_markup=remove_keyboard())
+    await message.answer(t("admin_contact.ask", language), reply_markup=remove_keyboard())
 
 
 @router.message(AdminContactStates.waiting_for_message, F.text)
 async def process_admin_contact_message(message: Message, state: FSMContext) -> None:
+    language = await get_user_language(message.from_user.id)
     message_text = message.text.strip()
 
     if not is_valid_admin_contact_message(message_text):
-        await message.answer(INVALID_MESSAGE_TEXT)
+        await message.answer(t("admin_contact.invalid", language))
         return
 
     if await is_rate_limited(
@@ -156,7 +158,7 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
         limit=RATE_LIMIT_MAX_SUBMISSIONS,
         window_seconds=RATE_LIMIT_WINDOW_SECONDS,
     ):
-        await message.answer(RATE_LIMITED_TEXT)
+        await message.answer(t("common.rate_limited", language))
         return
 
     # Idempotency (MVP audit instruction #4): guards against Telegram
@@ -181,14 +183,14 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
     except Exception:
         await finish_submission(submission_key, submission_token, failed=True)
         logger.exception("Failed to save admin contact message for user %s", message.from_user.id)
-        await message.answer(GENERIC_ERROR_TEXT)
+        await message.answer(t("common.error", language))
         return
 
     await finish_submission(submission_key, submission_token)
     await state.clear()
     await message.answer(
-        CONTACT_SUCCESS_TEXT_TEMPLATE.format(contact_number=contact.contact_number),
-        reply_markup=main_menu_keyboard(),
+        t("admin_contact.success", language, contact_number=contact.contact_number),
+        reply_markup=main_menu_keyboard(language),
     )
 
     # Notifying admins is best-effort: the citizen has already received their
@@ -202,7 +204,8 @@ async def process_admin_contact_message(message: Message, state: FSMContext) -> 
 
 @router.message(AdminContactStates.waiting_for_message)
 async def process_admin_contact_message_invalid(message: Message) -> None:
-    await message.answer(INVALID_MESSAGE_TEXT)
+    language = await get_user_language(message.from_user.id)
+    await message.answer(t("admin_contact.invalid", language))
 
 
 @router.callback_query(F.data.startswith(f"{ADMIN_CONTACT_REPLY_CALLBACK_PREFIX}:"))
@@ -288,31 +291,36 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
         await message.answer(NO_RECIPIENT_TEXT)
         return
 
-    user_text = USER_ANSWER_TEMPLATE.format(
+    user_text = t(
+        "admin_contact.answer",
+        user.language_code,
         contact_number=html.escape(contact.contact_number),
         admin_answer=html.escape(admin_answer),
     )
 
-    # Deliver to the citizen FIRST. Only persist admin_answer/COMPLETED once
-    # delivery actually succeeded -- otherwise the citizen would never see a
-    # reply that the database claims was already sent. user_text can exceed
-    # 4096 chars when admin_answer is near its 4000-char max (MVP audit
-    # CRITICAL #1), so this goes through send_long_message.
+    delivery_status = DELIVERY_DELIVERED
+    delivery_error_code = None
     try:
         await send_long_message(message.bot, user.telegram_id, user_text)
-    except Exception:
+    except Exception as exc:
+        delivery_status = DELIVERY_FAILED
+        delivery_error_code, unreachable = classify_delivery_exception(exc)
         logger.exception(
             "Failed to deliver admin contact reply to user %s for contact %s",
             user.telegram_id,
             contact_id,
         )
-        await message.answer(SEND_FAILED_TEXT)
-        # Keep AdminContactReplyStates.waiting_for_reply / the stored contact_id
-        # so the admin can just retry without re-clicking the notification button.
-        return
+        if unreachable:
+            await mark_user_unreachable(user.telegram_id)
 
     try:
-        completed_contact = await complete_admin_contact(contact_id, message.from_user.id, admin_answer)
+        completed_contact = await complete_admin_contact(
+            contact_id,
+            message.from_user.id,
+            admin_answer,
+            delivery_status=delivery_status,
+            delivery_error_code=delivery_error_code,
+        )
     except Exception:
         logger.exception("Failed to save admin contact answer for contact %s", contact_id)
         await message.answer(SAVE_FAILED_TEXT)
@@ -320,7 +328,12 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
         return
 
     await state.clear()
-    await message.answer(REPLY_SUCCESS_TEXT)
+    if delivery_status == DELIVERY_DELIVERED:
+        await message.answer(REPLY_SUCCESS_TEXT)
+    else:
+        await message.answer(
+            "⚠️ Жавоб базага сақланди, лекин фойдаланувчига Telegram орқали етказиб бўлмади."
+        )
 
     if completed_contact is not None and notify_chat_id is not None and notify_message_id is not None:
         # Update the admin's own notification to reflect COMPLETED status

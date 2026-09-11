@@ -1,77 +1,66 @@
 from __future__ import annotations
 
-import logging
-
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.data.documents import format_document_text, get_document
+from app.i18n import t
 from app.keyboards import (
     DOCUMENT_CALLBACK_PREFIX,
     DOCUMENTS_BACK_CALLBACK,
     DOCUMENTS_HOME_CALLBACK,
-    MENU_DOCUMENTS,
     document_detail_keyboard,
     documents_list_keyboard,
     main_menu_keyboard,
+    menu_texts,
     remove_keyboard,
 )
-
-logger = logging.getLogger(__name__)
+from app.services.user_service import get_user_language
 
 router = Router()
 
-DOCUMENTS_INTRO_TEXT = "Қуйидаги ҳужжатлардан бирини танланг:"
-DOCUMENT_NOT_FOUND_TEXT = "Ҳужжат топилмади. Илтимос, рўйхатдан қайта танланг."
-MAIN_MENU_TEXT = "🏠 Асосий меню"
 
-
-@router.message(F.text == MENU_DOCUMENTS)
+@router.message(F.text.in_(menu_texts("documents")))
 async def open_documents(message: Message, state: FSMContext) -> None:
-    # Reachable from any FSM state (registered before start.py's state
-    # catch-alls) -- treat it as leaving whatever flow the user was in.
     await state.clear()
-
-    # The main menu's ReplyKeyboard has to be explicitly retracted (Telegram
-    # only clears it on a message carrying ReplyKeyboardRemove -- see
-    # app.handlers.start._finish_registration for the same pattern) before
-    # the documents' own InlineKeyboard is shown; a single message can't
-    # carry both, so this takes two messages.
-    await message.answer(MENU_DOCUMENTS, reply_markup=remove_keyboard())
-    await message.answer(DOCUMENTS_INTRO_TEXT, reply_markup=documents_list_keyboard())
+    language = await get_user_language(message.from_user.id)
+    await message.answer(t("menu.documents", language), reply_markup=remove_keyboard())
+    await message.answer(t("documents.intro", language), reply_markup=documents_list_keyboard())
 
 
 @router.callback_query(F.data.startswith(f"{DOCUMENT_CALLBACK_PREFIX}:"))
 async def show_document(callback: CallbackQuery) -> None:
-    # This callback prefix is also used by the "📌 Асос: ..." reference
-    # buttons on FAQ answers, so a document can be opened either from the
-    # documents list or from a related FAQ answer.
+    language = await get_user_language(callback.from_user.id)
     document_id = callback.data.split(":", 1)[1]
     document = get_document(document_id)
-
     if document is None:
-        await callback.answer(DOCUMENT_NOT_FOUND_TEXT, show_alert=True)
+        await callback.answer(t("documents.not_found", language), show_alert=True)
         return
-
     if callback.message is not None:
         await callback.message.edit_text(
             format_document_text(document),
-            reply_markup=document_detail_keyboard(document),
+            reply_markup=document_detail_keyboard(document, language),
         )
     await callback.answer()
 
 
 @router.callback_query(F.data == DOCUMENTS_BACK_CALLBACK)
 async def back_to_documents_list(callback: CallbackQuery) -> None:
+    language = await get_user_language(callback.from_user.id)
     if callback.message is not None:
-        await callback.message.edit_text(DOCUMENTS_INTRO_TEXT, reply_markup=documents_list_keyboard())
+        await callback.message.edit_text(
+            t("documents.intro", language), reply_markup=documents_list_keyboard()
+        )
     await callback.answer()
 
 
 @router.callback_query(F.data == DOCUMENTS_HOME_CALLBACK)
 async def back_to_main_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    language = await get_user_language(callback.from_user.id)
     if callback.message is not None:
-        await callback.message.answer(MAIN_MENU_TEXT, reply_markup=main_menu_keyboard())
+        await callback.message.answer(
+            t("menu.title", language), reply_markup=main_menu_keyboard(language)
+        )
     await callback.answer()

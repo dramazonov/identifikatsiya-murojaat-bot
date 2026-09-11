@@ -5,9 +5,10 @@ Run commands from the repository root. Both app/database.py and Alembic load
 to sqlite+aiosqlite:///./bot.db. PostgreSQL uses postgresql+asyncpg://...
 Never print credentials or replace the existing .env during migration work.
 
-Current baseline and single HEAD: b9a1e47cb84b.
-The real bot.db was already stamped when audited on 2026-09-11. Do not stamp
-it again. No migration was executed against it during this audit.
+Baseline revision: b9a1e47cb84b. Current single HEAD: d7c2f4189a6e.
+Production databases previously at b9a1e47cb84b must run `alembic upgrade head`
+before deploying code that requires the Stage 17A/18A columns. Do not use stamp
+to skip this forward migration.
 
 Fresh EMPTY database only:
   py -m alembic upgrade head
@@ -23,8 +24,10 @@ Existing populated, UNSTAMPED SQLite database:
 3. Use sqlite3.Connection.backup to a NEW timestamped file. A raw copy of a
    running WAL database can omit committed WAL data. Verify the backup exists,
    opens cleanly, and has matching application contents.
-4. Only after those checks, with DATABASE_URL explicitly targeting that DB:
+4. If the existing populated SQLite schema is truly the old baseline schema,
+   stamp the BASELINE first (not HEAD), then apply reviewed forward migrations:
      py -m alembic stamp b9a1e47cb84b
+     py -m alembic upgrade head
 5. Compare complete application rows, identifiers and schema before/after.
    Only alembic_version and its index should be added. Account for independent
    live writes if any; never undo them merely to force an audit comparison.

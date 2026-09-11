@@ -1,49 +1,35 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session, engine
+from app.i18n import DEFAULT_LANGUAGE, normalize_language
 from app.models import User
+from app.services.datetime_utils import utcnow
+
+TELEGRAM_STATUS_ACTIVE = "ACTIVE"
+TELEGRAM_STATUS_UNREACHABLE = "UNREACHABLE"
+PHONE_VERIFICATION_SOURCE_TELEGRAM = "TELEGRAM_CONTACT"
 
 
 def _dialect_insert():
-    """The dialect-specific ``insert()`` construct for the two backends this
-    app targets (Stage 11/12) -- shared by every upsert below so the
-    dialect switch lives in exactly one place.
-    """
     return pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
 
 
 async def get_or_create_user_id(
     session: AsyncSession, telegram_id: int, telegram_username: str | None = None
 ) -> int:
-    """Return the ``users.id`` for ``telegram_id``, creating a minimal row if needed.
-
-    Stage 12 / instruction #8: shared by ``app.services.admin_contact_service
-    .create_admin_contact`` so its "create a minimal user if none exists yet"
-    step is race-safe under concurrent requests for the same telegram_id,
-    without duplicating the dialect-upsert logic already written for
-    ``save_user``. Runs inside the CALLER's session/transaction (unlike
-    ``save_user``, which opens its own) so it composes into a larger atomic
-    transaction -- e.g. create-user-then-create-admin-contact stays one
-    transaction, exactly as before.
-
-    Uses ``ON CONFLICT (telegram_id) DO NOTHING`` rather than ``DO UPDATE``:
-    callers of this helper only want an id to hang a foreign key off of, and
-    must never clobber an already-registered user's full_name/phone/region/
-    district (unlike save_user, which is an explicit "the user just told me
-    their name/phone" write). If the row already exists, the INSERT is a
-    no-op and the follow-up SELECT simply reads it back -- race-safe because
-    ``DO NOTHING`` never raises ``IntegrityError`` on the ``telegram_id``
-    UNIQUE constraint the way a plain INSERT would.
-    """
-    stmt = _dialect_insert()(User).values(telegram_id=telegram_id, telegram_username=telegram_username)
+    stmt = _dialect_insert()(User).values(
+        telegram_id=telegram_id,
+        telegram_username=telegram_username,
+        language_code=DEFAULT_LANGUAGE,
+        telegram_status=TELEGRAM_STATUS_ACTIVE,
+    )
     stmt = stmt.on_conflict_do_nothing(index_elements=[User.telegram_id])
     await session.execute(stmt)
-
     result = await session.execute(select(User.id).where(User.telegram_id == telegram_id))
     return result.scalar_one()
 
@@ -53,24 +39,20 @@ async def save_user(
     telegram_username: str | None,
     full_name: str,
     phone: str,
+    *,
+    phone_verified: bool | None = None,
+    phone_verification_source: str | None = None,
+    language_code: str | None = None,
 ) -> User:
-    """Create a new user or update the existing one for this telegram_id.
+    """Create/update the citizen profile atomically.
 
-    Stage 11 / instruction #3: a single atomic
-    ``INSERT ... ON CONFLICT (telegram_id) DO UPDATE`` instead of the old
-    "SELECT, then INSERT-or-UPDATE" (check-then-act). The old pattern could race under both SQLite and PostgreSQL: two requests could both see "no row yet" and
-    both try to INSERT, and the loser would raise ``IntegrityError`` on the
-    ``telegram_id`` UNIQUE constraint instead of updating. The upsert makes
-    the same call safe under real concurrency on either database -- see
-    tests/test_user_upsert.py's concurrent-registration test (``asyncio.gather``
-    with the same telegram_id).
-
-    ``sqlalchemy.dialects.sqlite``/``postgresql`` are the only two dialects
-    this app targets (current: SQLite; future: PostgreSQL), and both expose
-    the identical ``ON CONFLICT (...) DO UPDATE SET ...`` API -- the dialect
-    switch below (mirroring the one already in app/database.py's pragma
-    listener) is the only difference between the two backends.
+    Registration passes ``phone_verified=True`` only after Telegram returns a
+    Contact whose ``user_id`` matches the sender. Existing call sites that do
+    not explicitly verify ownership retain the safe default ``False``.
     """
+    now = utcnow()
+    language = normalize_language(language_code)
+    verified_for_insert = bool(phone_verified) if phone_verified is not None else False
     async with async_session() as session:
         async with session.begin():
             stmt = _dialect_insert()(User).values(
@@ -78,21 +60,38 @@ async def save_user(
                 telegram_username=telegram_username,
                 full_name=full_name,
                 phone=phone,
+                phone_verified=verified_for_insert,
+                phone_verification_source=(
+                    phone_verification_source if phone_verified is not None else None
+                ),
+                phone_verified_at=now if phone_verified else None,
+                language_code=language,
+                telegram_status=TELEGRAM_STATUS_ACTIVE,
+                last_seen_at=now,
+                unreachable_at=None,
             )
+            update_values = {
+                "telegram_username": stmt.excluded.telegram_username,
+                "full_name": stmt.excluded.full_name,
+                "phone": stmt.excluded.phone,
+                "telegram_status": TELEGRAM_STATUS_ACTIVE,
+                "last_seen_at": now,
+                "unreachable_at": None,
+                "updated_at": func.now(),
+            }
+            if phone_verified is not None:
+                update_values.update(
+                    {
+                        "phone_verified": verified_for_insert,
+                        "phone_verification_source": phone_verification_source,
+                        "phone_verified_at": now if phone_verified else None,
+                    }
+                )
+            if language_code is not None:
+                update_values["language_code"] = language
             stmt = stmt.on_conflict_do_update(
                 index_elements=[User.telegram_id],
-                set_={
-                    "telegram_username": stmt.excluded.telegram_username,
-                    "full_name": stmt.excluded.full_name,
-                    "phone": stmt.excluded.phone,
-                    # A Core-level "ON CONFLICT DO UPDATE" bypasses the ORM
-                    # unit-of-work, so the column's onupdate=func.now() never
-                    # fires on its own here (unlike the old ORM-attribute-set
-                    # path) -- set it explicitly to keep updated_at behavior
-                    # unchanged. created_at is deliberately left out of set_,
-                    # same as before: it must never change on an update.
-                    "updated_at": func.now(),
-                },
+                set_=update_values,
             )
             await session.execute(stmt)
 
@@ -100,33 +99,57 @@ async def save_user(
         return result.scalar_one()
 
 
+async def set_user_language(
+    telegram_id: int, telegram_username: str | None, language_code: str
+) -> User:
+    """Persist language choice without overwriting registration fields."""
+    language = normalize_language(language_code)
+    now = utcnow()
+    async with async_session() as session:
+        async with session.begin():
+            stmt = _dialect_insert()(User).values(
+                telegram_id=telegram_id,
+                telegram_username=telegram_username,
+                language_code=language,
+                telegram_status=TELEGRAM_STATUS_ACTIVE,
+                last_seen_at=now,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[User.telegram_id],
+                set_={
+                    "telegram_username": stmt.excluded.telegram_username,
+                    "language_code": language,
+                    "telegram_status": TELEGRAM_STATUS_ACTIVE,
+                    "last_seen_at": now,
+                    "unreachable_at": None,
+                    "updated_at": func.now(),
+                },
+            )
+            await session.execute(stmt)
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        return result.scalar_one()
+
+
 async def save_user_location(telegram_id: int, region: str, district: str) -> User:
-    """Save the selected region/district for an existing (or new) user.
-
-    Updates the existing record for this telegram_id instead of creating a duplicate.
-
-    Stage 12 / instruction #7: same "SELECT, then INSERT-or-UPDATE" ->
-    ``ON CONFLICT DO UPDATE`` rewrite as ``save_user`` (Stage 11), same
-    concurrency rationale -- see save_user's docstring. Scoped to only
-    region/district: telegram_username/full_name/phone are deliberately left
-    out of both the INSERT ``values()`` (so a brand-new row's other columns
-    stay NULL, exactly as ``User(telegram_id=telegram_id)`` used to leave
-    them) and the ``DO UPDATE SET`` (so an existing user's profile data is
-    never touched by this call) -- see
-    tests/test_user_upsert.py::test_save_user_location_preserves_profile_fields.
-    """
+    now = utcnow()
     async with async_session() as session:
         async with session.begin():
             stmt = _dialect_insert()(User).values(
                 telegram_id=telegram_id,
                 region=region,
                 district=district,
+                language_code=DEFAULT_LANGUAGE,
+                telegram_status=TELEGRAM_STATUS_ACTIVE,
+                last_seen_at=now,
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=[User.telegram_id],
                 set_={
                     "region": stmt.excluded.region,
                     "district": stmt.excluded.district,
+                    "telegram_status": TELEGRAM_STATUS_ACTIVE,
+                    "last_seen_at": now,
+                    "unreachable_at": None,
                     "updated_at": func.now(),
                 },
             )
@@ -136,15 +159,60 @@ async def save_user_location(telegram_id: int, region: str, district: str) -> Us
         return result.scalar_one()
 
 
+async def mark_user_active(telegram_id: int) -> None:
+    now = utcnow()
+    async with async_session() as session:
+        async with session.begin():
+            await session.execute(
+                update(User)
+                .where(User.telegram_id == telegram_id)
+                .values(
+                    telegram_status=TELEGRAM_STATUS_ACTIVE,
+                    last_seen_at=now,
+                    unreachable_at=None,
+                    updated_at=now,
+                )
+            )
+
+
+async def mark_user_unreachable(telegram_id: int) -> None:
+    now = utcnow()
+    async with async_session() as session:
+        async with session.begin():
+            await session.execute(
+                update(User)
+                .where(User.telegram_id == telegram_id)
+                .values(
+                    telegram_status=TELEGRAM_STATUS_UNREACHABLE,
+                    unreachable_at=now,
+                    updated_at=now,
+                )
+            )
+
+
 async def get_user_by_id(user_id: int) -> User | None:
-    """Fetch a single user by their primary key, or None if it doesn't exist."""
     async with async_session() as session:
         result = await session.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
 
 async def get_user_by_telegram_id(telegram_id: int) -> User | None:
-    """Fetch a single user by their Telegram id, or None if it doesn't exist."""
     async with async_session() as session:
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         return result.scalar_one_or_none()
+
+
+async def get_user_language(telegram_id: int) -> str:
+    user = await get_user_by_telegram_id(telegram_id)
+    return normalize_language(user.language_code if user is not None else None)
+
+
+def is_registration_complete(user: User | None) -> bool:
+    return bool(
+        user
+        and user.full_name
+        and user.phone
+        and user.phone_verified
+        and user.region
+        and user.district
+    )

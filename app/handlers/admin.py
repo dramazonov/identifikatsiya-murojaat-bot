@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.config import ADMIN_IDS
 from app.keyboards import APPEAL_REPLY_CALLBACK_PREFIX, admin_reply_keyboard
+from app.i18n import t
 from app.models import Appeal, Suggestion, User
 from app.services.appeal_service import claim_appeal, complete_appeal, get_appeal_by_id
 from app.services.datetime_utils import format_tashkent
@@ -17,7 +18,8 @@ from app.services.telegram_delivery import (
     safe_edit_message_text,
     send_long_message,
 )
-from app.services.user_service import get_user_by_id
+from app.services.delivery_status import DELIVERY_DELIVERED, DELIVERY_FAILED, classify_delivery_exception
+from app.services.user_service import get_user_by_id, mark_user_unreachable
 from app.states import AdminStates
 
 logger = logging.getLogger(__name__)
@@ -210,30 +212,34 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
         await message.answer(APPEAL_NOT_FOUND_TEXT)
         return
 
-    citizen_text = CITIZEN_ANSWER_TEMPLATE.format(
+    citizen_text = t(
+        "appeal.admin_answer",
+        user.language_code,
         appeal_number=html.escape(appeal.appeal_number),
         admin_answer=html.escape(admin_answer),
     )
 
-    # Deliver to the citizen FIRST. Only persist admin_answer/COMPLETED once
-    # delivery actually succeeded -- otherwise the citizen would never see a
-    # reply that the database claims was already sent. citizen_text can
-    # exceed 4096 chars when admin_answer is near its 4000-char max (MVP audit
-    # CRITICAL #1), so this goes through send_long_message instead of a plain
-    # send_message.
+    delivery_status = DELIVERY_DELIVERED
+    delivery_error_code = None
     try:
         await send_long_message(message.bot, user.telegram_id, citizen_text)
-    except Exception:
+    except Exception as exc:
+        delivery_status = DELIVERY_FAILED
+        delivery_error_code, unreachable = classify_delivery_exception(exc)
         logger.exception(
             "Failed to deliver admin reply to user %s for appeal %s", user.telegram_id, appeal_id
         )
-        await message.answer(SEND_FAILED_TEXT)
-        # Keep AdminStates.waiting_for_reply / the stored appeal_id so the admin
-        # can just retry without re-clicking the notification button.
-        return
+        if unreachable:
+            await mark_user_unreachable(user.telegram_id)
 
     try:
-        completed_appeal = await complete_appeal(appeal_id, message.from_user.id, admin_answer)
+        completed_appeal = await complete_appeal(
+            appeal_id,
+            message.from_user.id,
+            admin_answer,
+            delivery_status=delivery_status,
+            delivery_error_code=delivery_error_code,
+        )
     except Exception:
         logger.exception("Failed to save admin answer for appeal %s", appeal_id)
         await message.answer(SAVE_FAILED_TEXT)
@@ -241,7 +247,12 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
-    await message.answer(REPLY_SUCCESS_TEXT)
+    if delivery_status == DELIVERY_DELIVERED:
+        await message.answer(REPLY_SUCCESS_TEXT)
+    else:
+        await message.answer(
+            "⚠️ Жавоб базага сақланди, лекин фуқарога Telegram орқали етказиб бўлмади."
+        )
 
     if completed_appeal is not None and notify_chat_id is not None and notify_message_id is not None:
         # Update the admin's own notification to reflect COMPLETED status

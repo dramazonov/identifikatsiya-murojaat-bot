@@ -40,6 +40,9 @@ class AdminContact(Base):
     admin_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     admin_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    delivery_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Plain (non-Mapped-annotated) relationship() to avoid needing a forward-ref
     # import of User here; the string "User" is resolved via the shared registry.

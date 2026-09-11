@@ -99,12 +99,20 @@ async def claim_appeal(appeal_id: int, admin_id: int) -> tuple[Appeal | None, bo
         return appeal, claimed
 
 
-async def complete_appeal(appeal_id: int, admin_id: int, admin_answer: str) -> Appeal | None:
+async def complete_appeal(
+    appeal_id: int,
+    admin_id: int,
+    admin_answer: str,
+    *,
+    delivery_status: str | None = None,
+    delivery_error_code: str | None = None,
+) -> Appeal | None:
     """Record the admin's answer and mark the appeal COMPLETED.
 
-    Callers must only call this AFTER the answer has been successfully delivered
-    to the citizen -- this function itself does no delivery, only persistence.
-    Returns None if no appeal with this id exists.
+    Persists the admin answer regardless of Telegram delivery outcome. Delivery
+    status/error are recorded separately so a blocked/deleted/unreachable account
+    never causes the official answer to be lost. Returns None if the appeal does
+    not exist.
     """
     now = utcnow()
 
@@ -120,6 +128,9 @@ async def complete_appeal(appeal_id: int, admin_id: int, admin_answer: str) -> A
             appeal.admin_id = admin_id
             appeal.admin_answer = admin_answer
             appeal.answered_at = now
+            appeal.delivery_status = delivery_status
+            appeal.delivery_attempted_at = now if delivery_status else None
+            appeal.delivery_error_code = delivery_error_code
             appeal.updated_at = now
 
         return appeal
