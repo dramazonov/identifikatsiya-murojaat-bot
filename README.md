@@ -99,3 +99,7 @@ Web panel v1 includes:
 
 All state-changing web actions use CSRF tokens. Telegram admin functionality remains
 available in parallel and shares the same database claim/review rules.
+
+## Stage 27 — daily unanswered appeal reminder
+
+In production, the bot schedules a daily reminder at **10:00 Asia/Tashkent**. If there are unanswered `NEW`/`IN_PROGRESS` appeals, every current ADMIN and SUPERADMIN receives one consolidated Telegram warning with counts and the oldest appeal numbers. The run is idempotent per Tashkent calendar day through the existing Redis-backed lease mechanism, so duplicate scheduler tasks do not create duplicate daily warnings. No message is sent when there are zero unanswered appeals.

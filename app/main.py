@@ -113,14 +113,23 @@ def runtime_components(settings):
 
 async def poll(settings):
     from app.database import engine
+    from app.services.daily_appeal_reminder import daily_unanswered_appeal_reminder_loop
     bot, dp, redis = runtime_components(settings)
+    reminder_task = None
     try:
         await init_db()
         if redis is not None:
             await redis.ping()
+        reminder_task = asyncio.create_task(
+            daily_unanswered_appeal_reminder_loop(bot),
+            name="daily-unanswered-appeal-reminder",
+        )
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
+        if reminder_task is not None:
+            reminder_task.cancel()
+            await asyncio.gather(reminder_task, return_exceptions=True)
         await dp.storage.close()
         await dp.fsm.events_isolation.close()
         await bot.session.close()

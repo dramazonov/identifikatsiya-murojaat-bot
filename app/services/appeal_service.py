@@ -13,6 +13,17 @@ APPEAL_NUMBER_PREFIX = "MUR"
 APPEAL_NUMBER_DIGITS = 6
 
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class UnansweredAppealSummary:
+    total: int
+    new: int
+    in_progress: int
+    appeals: list[Appeal]
+
+
 def generate_appeal_number(appeal_id: int) -> str:
     """Format a sequential, human-readable appeal number from the appeal's row id.
 
@@ -153,6 +164,81 @@ async def list_admin_appeals(status: str, *, limit: int = 10) -> list[Appeal]:
         else:
             stmt = stmt.where(Appeal.status == status)
         result = await session.execute(stmt.order_by(Appeal.id.desc()).limit(limit))
+        return list(result.scalars().all())
+
+
+async def get_unanswered_appeal_summary(*, limit: int = 10) -> UnansweredAppealSummary:
+    """Return unanswered NEW/IN_PROGRESS appeals for the daily admin reminder.
+
+    Expired IN_PROGRESS claims are treated as NEW, matching the admin panel's
+    existing reclaim behavior. COMPLETED/REJECTED rows are never included.
+    """
+    if limit <= 0 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+
+    now = utcnow()
+    unanswered = Appeal.admin_answer.is_(None) & Appeal.status.in_(("NEW", "IN_PROGRESS"))
+    effective_new = or_(
+        Appeal.status == "NEW",
+        (Appeal.status == "IN_PROGRESS")
+        & Appeal.claim_expires_at.is_not(None)
+        & (Appeal.claim_expires_at <= now),
+    )
+    active_in_progress = (Appeal.status == "IN_PROGRESS") & or_(
+        Appeal.claim_expires_at.is_(None),
+        Appeal.claim_expires_at > now,
+    )
+
+    async with async_session() as session:
+        total = int(
+            (await session.execute(select(func.count(Appeal.id)).where(unanswered))).scalar_one()
+        )
+        new_count = int(
+            (
+                await session.execute(
+                    select(func.count(Appeal.id)).where(unanswered, effective_new)
+                )
+            ).scalar_one()
+        )
+        in_progress_count = int(
+            (
+                await session.execute(
+                    select(func.count(Appeal.id)).where(unanswered, active_in_progress)
+                )
+            ).scalar_one()
+        )
+        rows = list(
+            (
+                await session.scalars(
+                    select(Appeal)
+                    .where(unanswered)
+                    .order_by(Appeal.created_at.asc(), Appeal.id.asc())
+                    .limit(limit)
+                )
+            ).all()
+        )
+    return UnansweredAppealSummary(
+        total=total,
+        new=new_count,
+        in_progress=in_progress_count,
+        appeals=rows,
+    )
+
+
+async def list_unanswered_admin_appeals(*, limit: int = 20) -> list[Appeal]:
+    """Oldest unanswered appeals for the reminder's admin-panel shortcut."""
+    if limit <= 0 or limit > 100:
+        raise ValueError("limit must be between 1 and 100")
+    async with async_session() as session:
+        result = await session.execute(
+            select(Appeal)
+            .where(
+                Appeal.admin_answer.is_(None),
+                Appeal.status.in_(("NEW", "IN_PROGRESS")),
+            )
+            .order_by(Appeal.created_at.asc(), Appeal.id.asc())
+            .limit(limit)
+        )
         return list(result.scalars().all())
 
 

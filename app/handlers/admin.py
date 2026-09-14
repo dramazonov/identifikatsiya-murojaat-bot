@@ -43,6 +43,7 @@ from app.services.appeal_service import (
     complete_appeal,
     get_appeal_by_id,
     list_admin_appeals,
+    list_unanswered_admin_appeals,
     release_appeal_claim,
     search_appeal_by_number,
 )
@@ -659,6 +660,26 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
                 await callback.message.answer(
                     f"{html.escape(appeal.appeal_number)} — {appeal_status_text('NEW', 'uz_cyrl')}",
                     reply_markup=admin_reply_keyboard(appeal.id),
+                )
+    elif action == "unanswered":
+        rows = await list_unanswered_admin_appeals(limit=20)
+        if not rows:
+            await callback.message.answer("✅ Жавоб берилмаган мурожаатлар йўқ.")
+        else:
+            await callback.message.answer("⚠️ <b>Жавоб берилмаган мурожаатлар</b>")
+            now = utcnow()
+            for appeal in rows:
+                expired = (
+                    appeal.status == "IN_PROGRESS"
+                    and appeal.claim_expires_at is not None
+                    and appeal.claim_expires_at <= now
+                )
+                effective_status = "NEW" if appeal.status == "NEW" or expired else "IN_PROGRESS"
+                markup = admin_reply_keyboard(appeal.id) if effective_status == "NEW" else None
+                await callback.message.answer(
+                    f"{html.escape(appeal.appeal_number)} — "
+                    f"{appeal_status_text(effective_status, 'uz_cyrl')}",
+                    reply_markup=markup,
                 )
     elif action == "suggestions":
         if not await is_superadmin(callback.from_user.id):

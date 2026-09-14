@@ -5,6 +5,7 @@ from aiohttp import web
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 from app.admin_web import register_admin_web_routes
+from app.services.daily_appeal_reminder import daily_unanswered_appeal_reminder_loop
 
 
 def create_http_app(settings, dispatcher, bot, *, db_check, redis_check, cleanup):
@@ -25,8 +26,16 @@ def create_http_app(settings, dispatcher, bot, *, db_check, redis_check, cleanup
     async def startup(app):
         await asyncio.wait_for(db_check(), timeout=10)
         await asyncio.wait_for(redis_check(), timeout=10)
+        app["daily_unanswered_appeal_reminder_task"] = asyncio.create_task(
+            daily_unanswered_appeal_reminder_loop(bot),
+            name="daily-unanswered-appeal-reminder",
+        )
 
     async def close(app):
+        task = app.get("daily_unanswered_appeal_reminder_task")
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await cleanup()
 
     app.router.add_get("/health", health)
