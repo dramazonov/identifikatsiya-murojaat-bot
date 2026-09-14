@@ -206,6 +206,7 @@ def admin_panel_keyboard(*, superadmin: bool, unanswered_count: int = 0) -> Inli
         )
         builder.row(InlineKeyboardButton(text="💡 Таклифлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:suggestions"))
         builder.row(InlineKeyboardButton(text="👥 Админлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:admins"))
+        builder.row(InlineKeyboardButton(text="🧾 Аудит журнали", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:audit"))
     builder.row(InlineKeyboardButton(text="🔎 Қидириш", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:search"))
     builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:stats"))
     builder.row(InlineKeyboardButton(text="🌐 Web panel", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:web"))

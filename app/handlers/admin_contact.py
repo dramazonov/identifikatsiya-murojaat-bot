@@ -33,9 +33,24 @@ from app.services.telegram_delivery import (
 from app.services.delivery_status import DELIVERY_DELIVERED, DELIVERY_FAILED, classify_delivery_exception
 from app.services.user_service import get_user_by_id, get_user_language, mark_user_unreachable
 from app.services.validators import is_valid_admin_contact_message
+from app.services.audit_log_service import write_audit_log
 from app.states import AdminContactReplyStates, AdminContactStates
 
 logger = logging.getLogger(__name__)
+
+
+async def _audit_contact_action(actor_id: int, action: str, contact: AdminContact, **details) -> None:
+    try:
+        await write_audit_log(
+            actor_telegram_id=actor_id,
+            action=action,
+            target_type="ADMIN_CONTACT",
+            target_id=contact.contact_number,
+            channel="TELEGRAM",
+            details={"contact_id": contact.id, **details},
+        )
+    except Exception:
+        logger.exception("Failed to append admin-contact audit log for %s", contact.id)
 
 router = Router()
 
@@ -244,6 +259,9 @@ async def process_admin_contact_reply_callback(callback: CallbackQuery, state: F
                 logger.exception("Failed to clear stale reply button for admin contact %s", contact_id)
         return
 
+    if claimed:
+        await _audit_contact_action(callback.from_user.id, "ADMIN_CONTACT_CLAIMED", contact)
+
     await state.set_state(AdminContactReplyStates.waiting_for_reply)
     await state.update_data(
         contact_id=contact_id,
@@ -329,6 +347,14 @@ async def process_admin_contact_reply_text(message: Message, state: FSMContext) 
         return
 
     await state.clear()
+    if completed_contact is not None:
+        await _audit_contact_action(
+            message.from_user.id,
+            "ADMIN_CONTACT_REPLIED",
+            completed_contact,
+            delivery_status=delivery_status,
+            delivery_error_code=delivery_error_code,
+        )
     if delivery_status == DELIVERY_DELIVERED:
         await message.answer(REPLY_SUCCESS_TEXT)
     else:

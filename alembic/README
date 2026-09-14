@@ -5,14 +5,14 @@ Run commands from the repository root. Both app/database.py and Alembic load
 to sqlite+aiosqlite:///./bot.db. PostgreSQL uses postgresql+asyncpg://...
 Never print credentials or replace the existing .env during migration work.
 
-Baseline revision: b9a1e47cb84b. Current single HEAD: a8b4d6e21c90.
+Baseline revision: b9a1e47cb84b. Current single HEAD: c3e9f7a42d11.
 Production databases previously at b9a1e47cb84b must run `alembic upgrade head`
-before deploying code that requires the Stage 17A/18A columns. Do not use stamp
+before deploying code that requires later schema changes, including the Stage 30 audit log. Do not use stamp
 to skip this forward migration.
 
 Fresh EMPTY database only:
   py -m alembic upgrade head
-This creates the five application tables, indexes, foreign keys and version.
+This creates the application tables, indexes, foreign keys and version, including audit_logs.
 Application startup still uses create_all and retains the old additive SQLite
 column patches for legacy MVP databases. Startup does not stamp or run Alembic.
 For production, migrate explicitly before starting application workers.

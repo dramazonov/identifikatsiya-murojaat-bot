@@ -112,3 +112,19 @@ In production, the bot schedules a daily reminder at **10:00 Asia/Tashkent**. If
 - Broadcasts support text, photo, video, GIF/animation and documents. The original Telegram message is copied as-is after an explicit confirmation step.
 - Broadcast delivery is throttled, handles Telegram flood-control retry, continues after per-recipient failures and marks blocked/deactivated citizen chats unreachable.
 - No database migration and no new environment variable are required.
+
+## Stage 29 — simplified appeal submission
+
+- New citizen appeals now use only two steps: choose a direction, then send the appeal text.
+- The appeal is saved immediately after the text and a `MUR-xxxxxx` number is returned.
+- New submissions no longer ask for PDF attachment or a separate confirmation step; historical attachments remain readable.
+
+## Stage 30 — privileged-action Audit Log
+
+- New append-only `audit_logs` table records privileged admin/superadmin actions without storing citizen message bodies or infrastructure secrets.
+- Telegram and Web Admin claim/release/reply actions are recorded with actor ID, role, target, channel and result metadata.
+- Suggestion review, dynamic admin add/role-change/remove, SUPERADMIN broadcasts and admin-contact claim/reply are audited.
+- Web login/logout events are recorded; session IDs, CSRF values and login tokens are never stored in the audit payload.
+- SUPERADMIN gets a read-only `Audit log` view in Telegram and Web Admin. Web Audit Log supports actor/action/channel filters and pagination.
+- Regular ADMIN accounts cannot open the Web Audit Log, and the application exposes no audit update/delete endpoint or service function.
+- PostgreSQL requires Alembic revision `c3e9f7a42d11` before deploying this stage.

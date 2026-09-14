@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import io
 import logging
 import secrets
@@ -31,6 +32,7 @@ from app.services.suggestion_service import review_suggestion
 from app.services.telegram_delivery import send_long_message
 from app.services.user_service import get_user_by_id, mark_user_unreachable
 from app.services import web_admin_auth
+from app.services.audit_log_service import list_audit_logs, parse_audit_details, write_audit_log
 from app.services.web_admin_service import (
     category_counts,
     dashboard_counts,
@@ -42,6 +44,28 @@ from app.services.web_admin_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _audit_web_action(
+    ctx: "WebContext",
+    action: str,
+    target_type: str,
+    target_id=None,
+    *,
+    details: dict | None = None,
+) -> None:
+    try:
+        await write_audit_log(
+            actor_telegram_id=ctx.admin_id,
+            actor_role=ctx.role,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            channel="WEB",
+            details=details,
+        )
+    except Exception:
+        logger.exception("Failed to append web audit log for %s on %s:%s", action, target_type, target_id)
 
 STATUS_LABELS = {
     "NEW": "Yangi",
@@ -132,6 +156,7 @@ def _nav(ctx: WebContext, active: str) -> str:
     if ctx.superadmin:
         items.insert(2, ("suggestions", "/admin/suggestions", "◆", "Takliflar"))
         items.insert(-1, ("admins", "/admin/admins", "♟", "Adminlar"))
+        items.insert(-1, ("audit", "/admin/audit", "◫", "Audit jurnali"))
     links = "".join(
         f'<a class="nav-link {"active" if key == active else ""}" href="{url}">'
         f'<span>{icon}</span>{_e(label)}</a>'
@@ -181,7 +206,13 @@ async def login(request: web.Request) -> web.StreamResponse:
     role = await get_admin_role(admin_id)
     if role is None:
         return _html("<h2>Ruxsat yo‘q.</h2>", status=403)
-    sid, _ = await web_admin_auth.create_session(admin_id)
+    sid, session = await web_admin_auth.create_session(admin_id)
+    await _audit_web_action(
+        WebContext(admin_id, role, session.csrf_token),
+        "WEB_LOGIN",
+        "SESSION",
+        admin_id,
+    )
     response = web.HTTPSeeOther(location="/admin/")
     response.set_cookie(
         web_admin_auth.cookie_name(), sid, httponly=True, secure=True, samesite="Strict",
@@ -310,6 +341,10 @@ async def appeal_claim(request: web.Request) -> web.StreamResponse:
     if not claimed and appeal.admin_id != ctx.admin_id:
         raise web.HTTPConflict(text="Murojaat boshqa admin tomonidan olingan.")
     if claimed:
+        await _audit_web_action(
+            ctx, "APPEAL_CLAIMED", "APPEAL", appeal.appeal_number,
+            details={"appeal_id": appeal.id},
+        )
         view = await get_appeal_view(appeal_id)
         if view is not None:
             try:
@@ -335,6 +370,10 @@ async def appeal_release(request: web.Request) -> web.StreamResponse:
     appeal = await release_appeal_claim(appeal_id, ctx.admin_id)
     if appeal is None:
         raise web.HTTPNotFound()
+    await _audit_web_action(
+        ctx, "APPEAL_CLAIM_RELEASED", "APPEAL", appeal.appeal_number,
+        details={"appeal_id": appeal.id},
+    )
     await _set_notification_buttons(request.app["bot"], appeal_id, True)
     await _broadcast(
         request.app["bot"], await all_admin_ids(),
@@ -378,6 +417,17 @@ async def appeal_reply(request: web.Request) -> web.StreamResponse:
     )
     if completed is None:
         raise web.HTTPConflict(text="Murojaat holati o‘zgargan. Sahifani yangilang.")
+    await _audit_web_action(
+        ctx,
+        "APPEAL_REPLIED",
+        "APPEAL",
+        completed.appeal_number,
+        details={
+            "appeal_id": completed.id,
+            "delivery_status": delivery_status,
+            "delivery_error_code": delivery_error_code,
+        },
+    )
     await _set_notification_buttons(request.app["bot"], appeal_id, False)
     await clear_notifications("appeal", appeal_id)
     await _broadcast(
@@ -447,6 +497,10 @@ async def suggestion_review(request: web.Request) -> web.StreamResponse:
     if suggestion is None:
         raise web.HTTPNotFound()
     if changed:
+        await _audit_web_action(
+            ctx, "SUGGESTION_REVIEWED", "SUGGESTION", suggestion.suggestion_number,
+            details={"suggestion_id": suggestion.id},
+        )
         for info in (await list_notifications("suggestion", suggestion.id)).values():
             try:
                 await request.app["bot"].edit_message_reply_markup(
@@ -493,7 +547,16 @@ async def admin_add(request: web.Request) -> web.StreamResponse:
     role = str(data.get("role", "")).strip()
     if not raw.isdigit() or int(raw) <= 0 or role not in {ROLE_ADMIN, ROLE_SUPERADMIN}:
         raise web.HTTPBadRequest(text="Telegram ID yoki rol noto‘g‘ri.")
-    await add_or_update_admin(int(raw), role, ctx.admin_id)
+    target_id = int(raw)
+    previous_role = await get_admin_role(target_id)
+    entry = await add_or_update_admin(target_id, role, ctx.admin_id)
+    action = "ADMIN_ADDED" if previous_role is None else (
+        "ADMIN_ROLE_CHANGED" if previous_role != entry.role else "ADMIN_SAVED"
+    )
+    await _audit_web_action(
+        ctx, action, "ADMIN", target_id,
+        details={"previous_role": previous_role, "new_role": entry.role},
+    )
     try:
         await send_long_message(
             request.app["bot"], int(raw),
@@ -508,10 +571,55 @@ async def admin_remove(request: web.Request) -> web.StreamResponse:
     ctx = await _require_context(request, superadmin=True)
     await _require_csrf(request, ctx)
     target = int(request.match_info["telegram_id"])
+    previous_role = await get_admin_role(target)
     removed = await remove_dynamic_admin(target, ctx.admin_id)
     if not removed:
         raise web.HTTPConflict(text="Bu adminni o‘chirib bo‘lmaydi.")
+    await _audit_web_action(
+        ctx, "ADMIN_REMOVED", "ADMIN", target,
+        details={"previous_role": previous_role},
+    )
     raise web.HTTPSeeOther(location="/admin/admins")
+
+
+async def audit_logs(request: web.Request) -> web.StreamResponse:
+    ctx = await _require_context(request, superadmin=True)
+    actor = request.rel_url.query.get("actor", "").strip()
+    action = request.rel_url.query.get("action", "").strip().upper()
+    channel = request.rel_url.query.get("channel", "").strip().upper()
+    try:
+        page_num = int(request.rel_url.query.get("page", "1"))
+    except ValueError:
+        page_num = 1
+    result = await list_audit_logs(page=page_num, actor=actor, action=action, channel=channel)
+    rows = []
+    for row in result.items:
+        details = parse_audit_details(row)
+        details_text = json.dumps(details, ensure_ascii=False, sort_keys=True) if details else "—"
+        target = f"{row.target_type}: {row.target_id}" if row.target_id else row.target_type
+        rows.append(
+            f'<tr><td>{_e(_dt(row.created_at))}</td><td class="num">{_e(row.actor_telegram_id)}</td>'
+            f'<td>{_e(row.actor_role)}</td><td><b>{_e(row.action)}</b></td>'
+            f'<td>{_e(target)}</td><td>{_e(row.channel)}</td><td class="muted">{_e(details_text)}</td></tr>'
+        )
+    table_rows = "".join(rows) or '<tr><td colspan="7" class="empty">Audit yozuvlari yo‘q.</td></tr>'
+    filters = (
+        '<div class="section"><div class="section-body"><form class="filters" method="get">'
+        f'<input class="input" name="actor" value="{_e(actor)}" placeholder="Admin Telegram ID">'
+        f'<input class="input" name="action" value="{_e(action)}" placeholder="Masalan: APPEAL_REPLIED">'
+        f'<select class="select" name="channel"><option value="">Barcha kanallar</option>'
+        f'<option value="TELEGRAM" {"selected" if channel == "TELEGRAM" else ""}>TELEGRAM</option>'
+        f'<option value="WEB" {"selected" if channel == "WEB" else ""}>WEB</option></select>'
+        '<button class="btn btn-primary" type="submit">Filtrlash</button></form></div></div>'
+    )
+    body = filters + (
+        f'<div class="section"><div class="section-head"><h2>Audit jurnali ({result.total})</h2>'
+        '<span class="muted">Faqat o‘qish rejimi</span></div><div class="table-wrap"><table>'
+        '<thead><tr><th>Vaqt</th><th>Admin ID</th><th>Rol</th><th>Amal</th><th>Obyekt</th><th>Kanal</th><th>Tafsilot</th></tr></thead>'
+        f'<tbody>{table_rows}</tbody></table></div>'
+        f'{_page_links("/admin/audit", result, {"actor": actor, "action": action, "channel": channel})}</div>'
+    )
+    return _html(_layout(ctx, title="Audit jurnali", active="audit", body=body))
 
 
 async def stats(request: web.Request) -> web.StreamResponse:
@@ -528,6 +636,7 @@ async def logout(request: web.Request) -> web.StreamResponse:
     ctx = await _require_context(request)
     await _require_csrf(request, ctx)
     sid = request.cookies.get(web_admin_auth.cookie_name())
+    await _audit_web_action(ctx, "WEB_LOGOUT", "SESSION", ctx.admin_id)
     await web_admin_auth.destroy_session(sid)
     response = web.HTTPSeeOther(location="/admin/")
     response.del_cookie(web_admin_auth.cookie_name(), path="/admin")
@@ -556,4 +665,5 @@ def register_admin_web_routes(app: web.Application, bot: Bot) -> None:
     app.router.add_get("/admin/admins", admins)
     app.router.add_post("/admin/admins/add", admin_add)
     app.router.add_post("/admin/admins/{telegram_id:\\d+}/remove", admin_remove)
+    app.router.add_get("/admin/audit", audit_logs)
     app.router.add_get("/admin/stats", stats)

@@ -1,7 +1,7 @@
 """Alembic metadata-consistency check (Stage 11 / instruction #8).
 
 Proves the full migration chain (baseline b9a1e47cb84b through current HEAD
-a8b4d6e21c90) builds the same schema the current SQLAlchemy models declare: apply
+c3e9f7a42d11) builds the same schema the current SQLAlchemy models declare: apply
 ``alembic upgrade head`` to a brand-new, empty, throwaway SQLite file (never
 the real ./bot.db, and never the shared tests/conftest.py database), then
 reflect that database back and diff it against app.database.Base.metadata.
@@ -97,7 +97,7 @@ def test_alembic_url_with_percent_and_stamp_preserves_data(tmp_path, monkeypatch
     command.stamp(cfg, "head")
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("SELECT * FROM users").fetchall() == before
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchall() == [("a8b4d6e21c90",)]
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchall() == [("c3e9f7a42d11",)]
         after = connection.execute("SELECT type, name, sql FROM sqlite_master WHERE tbl_name != 'alembic_version' ORDER BY type, name").fetchall()
         assert after == schema
 
@@ -113,4 +113,4 @@ def test_postgresql_baseline_compiles_offline(monkeypatch):
     assert "CREATE TABLE users" in sql
     assert "SERIAL" in sql
     assert "PRAGMA" not in sql
-    assert "a8b4d6e21c90" in sql
+    assert "c3e9f7a42d11" in sql

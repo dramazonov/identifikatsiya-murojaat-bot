@@ -131,8 +131,8 @@ lock; failures exit nonzero and prevent bot startup. The Compose migration job
 also gates normal `up` startup. Workers only read/check the revision and never
 create tables or run the SQLite compatibility patches in production.
 
-The PostgreSQL validator also upgrades to HEAD, then checks revision
-`b9a1e47cb84b`, model/schema agreement, tables, indexes, unique constraints, FKs,
+The PostgreSQL validator also upgrades to HEAD, then checks the current Alembic HEAD revision
+`c3e9f7a42d11`, model/schema agreement, tables, indexes, unique constraints, FKs,
 UTC, service inserts/updates, concurrency, identifier length/format, admin claims,
 constraint failures and rollbacks. It uses tagged negative Telegram IDs and
 removes only its own records in `finally`. Sequences advance; gaps are expected

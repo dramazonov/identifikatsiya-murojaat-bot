@@ -43,7 +43,7 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
             elif "SELECT EXISTS" in query:
                 value = occupied
             elif "alembic_version" in query:
-                value = "a8b4d6e21c90"
+                value = "c3e9f7a42d11"
             elif "SHOW timezone" in query:
                 value = "UTC"
             else:
@@ -78,7 +78,7 @@ class PreparationTests(unittest.IsolatedAsyncioTestCase):
         engine.connect.return_value.__aexit__ = AsyncMock(return_value=False)
         engine.dispose = AsyncMock()
         scripts = MagicMock()
-        scripts.from_config.return_value.get_heads.return_value = ["a8b4d6e21c90"]
+        scripts.from_config.return_value.get_heads.return_value = ["c3e9f7a42d11"]
         modules = {
             "app.database": types.SimpleNamespace(engine=engine, verify_schema=verify),
             "app.migrate": types.SimpleNamespace(migrate=migrate),

@@ -69,8 +69,34 @@ from app.services.suggestion_service import list_suggestions, review_suggestion,
 from app.services.web_admin_auth import issue_login_url
 from app.states import AdminBroadcastStates, AdminStates
 from app.services.broadcast_service import broadcast_copied_message
+from app.services.audit_log_service import (
+    list_recent_audit_logs,
+    write_audit_log,
+)
 
 logger = logging.getLogger(__name__)
+
+
+async def _audit_admin_action(
+    actor_id: int,
+    action: str,
+    target_type: str,
+    target_id=None,
+    *,
+    details: dict | None = None,
+) -> None:
+    """Best-effort append-only audit; a logging fault must not undo a completed action."""
+    try:
+        await write_audit_log(
+            actor_telegram_id=actor_id,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            channel="TELEGRAM",
+            details=details,
+        )
+    except Exception:
+        logger.exception("Failed to append audit log for %s on %s:%s", action, target_type, target_id)
 
 router = Router()
 
@@ -258,6 +284,13 @@ async def process_appeal_reply_callback(callback: CallbackQuery, state: FSMConte
     # those internal values. Notify them with the label in their selected UI
     # language (Uzbek users see "Ko‘rib chiqilmoqda" / "Кўриб чиқилмоқда").
     if claimed:
+        await _audit_admin_action(
+            callback.from_user.id,
+            "APPEAL_CLAIMED",
+            "APPEAL",
+            appeal.appeal_number,
+            details={"appeal_id": appeal.id},
+        )
         try:
             citizen = await get_user_by_id(appeal.user_id)
             if citizen is not None:
@@ -411,6 +444,17 @@ async def process_admin_reply_text(message: Message, state: FSMContext) -> None:
             logger.exception("Failed to send answer follow-up message for appeal %s", appeal_id)
 
     if completed_appeal is not None:
+        await _audit_admin_action(
+            message.from_user.id,
+            "APPEAL_REPLIED",
+            "APPEAL",
+            completed_appeal.appeal_number,
+            details={
+                "appeal_id": completed_appeal.id,
+                "delivery_status": delivery_status,
+                "delivery_error_code": delivery_error_code,
+            },
+        )
         await _broadcast_admins(
             message.bot,
             f"✅ <b>{html.escape(completed_appeal.appeal_number)}</b> мурожаати бўйича {_admin_display_name(message.from_user)} жавоб юборди.",
@@ -436,6 +480,13 @@ async def process_appeal_cancel_reply(callback: CallbackQuery, state: FSMContext
         return
     await state.clear()
     await _set_appeal_buttons(callback.bot, appeal_id, enabled=True)
+    await _audit_admin_action(
+        callback.from_user.id,
+        "APPEAL_CLAIM_RELEASED",
+        "APPEAL",
+        appeal.appeal_number,
+        details={"appeal_id": appeal.id},
+    )
     await _broadcast_admins(
         callback.bot,
         f"🔓 <b>{html.escape(appeal.appeal_number)}</b> мурожаати яна жавоб бериш учун очилди.",
@@ -490,6 +541,13 @@ async def process_suggestion_review(callback: CallbackQuery) -> None:
         except Exception:
             logger.exception("Failed to notify citizen about reviewed suggestion %s", suggestion.id)
 
+    await _audit_admin_action(
+        callback.from_user.id,
+        "SUGGESTION_REVIEWED",
+        "SUGGESTION",
+        suggestion.suggestion_number,
+        details={"suggestion_id": suggestion.id},
+    )
     await _broadcast_superadmins(
         callback.bot,
         f"☑️ <b>{html.escape(suggestion.suggestion_number)}</b> таклифи {_admin_display_name(callback.from_user)} томонидан кўриб чиқилди.",
@@ -581,6 +639,7 @@ async def admin_manage_role_selected(callback: CallbackQuery, state: FSMContext)
         await state.clear()
         await callback.answer("Telegram ID топилмади. Қайта уриниб кўринг.", show_alert=True)
         return
+    previous_role = await get_admin_role(target_admin_id)
     try:
         entry = await add_or_update_admin(target_admin_id, role, callback.from_user.id)
     except ValueError as exc:
@@ -588,6 +647,16 @@ async def admin_manage_role_selected(callback: CallbackQuery, state: FSMContext)
         await callback.answer(str(exc), show_alert=True)
         return
     await state.clear()
+    action = "ADMIN_ADDED" if previous_role is None else (
+        "ADMIN_ROLE_CHANGED" if previous_role != entry.role else "ADMIN_SAVED"
+    )
+    await _audit_admin_action(
+        callback.from_user.id,
+        action,
+        "ADMIN",
+        entry.telegram_id,
+        details={"previous_role": previous_role, "new_role": entry.role},
+    )
     if callback.message is not None:
         await callback.message.answer(
             f"✅ <code>{entry.telegram_id}</code> — <b>{entry.role}</b> сифатида сақланди."
@@ -614,10 +683,18 @@ async def admin_manage_remove(callback: CallbackQuery) -> None:
     except (ValueError, IndexError):
         await callback.answer("Telegram ID нотўғри.", show_alert=True)
         return
+    previous_role = await get_admin_role(target_admin_id)
     removed = await remove_dynamic_admin(target_admin_id, callback.from_user.id)
     if not removed:
         await callback.answer("Бу админни бот орқали ўчириб бўлмайди.", show_alert=True)
         return
+    await _audit_admin_action(
+        callback.from_user.id,
+        "ADMIN_REMOVED",
+        "ADMIN",
+        target_admin_id,
+        details={"previous_role": previous_role},
+    )
     if callback.message is not None:
         await callback.message.answer(f"🗑 <code>{target_admin_id}</code> админлар рўйхатидан ўчирилди.")
         await _send_admin_management(callback.message)
@@ -713,6 +790,18 @@ async def admin_broadcast_callback(callback: CallbackQuery, state: FSMContext) -
             from_chat_id=from_chat_id,
             message_id=message_id,
             mark_unreachable_users=audience == "users",
+        )
+        await _audit_admin_action(
+            callback.from_user.id,
+            "BROADCAST_SENT",
+            "BROADCAST",
+            audience.upper(),
+            details={
+                "total": result.total,
+                "sent": result.sent,
+                "failed": result.failed,
+                "unreachable": result.unreachable,
+            },
         )
 
         if callback.message is not None:
@@ -871,6 +960,22 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
                     f"💡 {html.escape(suggestion.suggestion_number)}",
                     reply_markup=suggestion_review_keyboard(suggestion.id),
                 )
+    elif action == "audit":
+        if not await is_superadmin(callback.from_user.id):
+            await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+            return
+        rows = await list_recent_audit_logs(limit=20)
+        if not rows:
+            await callback.message.answer("🧾 Аудит журнали ҳозирча бўш.")
+        else:
+            lines = ["🧾 <b>Охирги админ амаллари</b>", ""]
+            for row in rows:
+                target = f" · {html.escape(row.target_id)}" if row.target_id else ""
+                lines.append(
+                    f"{format_tashkent(row.created_at)} · <code>{row.actor_telegram_id}</code> · "
+                    f"<b>{html.escape(row.action)}</b>{target} · {html.escape(row.channel)}"
+                )
+            await callback.message.answer("\n".join(lines))
     elif action == "web":
         try:
             url = await issue_login_url(callback.from_user.id)
