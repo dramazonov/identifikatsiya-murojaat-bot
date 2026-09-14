@@ -204,6 +204,7 @@ async def admin_root(request: web.Request) -> web.StreamResponse:
 <div class="card"><div class="kpi-label">Jami murojaatlar</div><div class="kpi-value">{counts.get('appeals',0)}</div></div>
 <div class="card"><div class="kpi-label">Yangi</div><div class="kpi-value">{counts.get('appeal_new',0)}</div></div>
 <div class="card"><div class="kpi-label">Ko‘rib chiqilmoqda</div><div class="kpi-value">{counts.get('appeal_in_progress',0)}</div></div>
+<a class="card" style="text-decoration:none" href="/admin/appeals?unanswered=1"><div class="kpi-label">Javobsiz murojaatlar</div><div class="kpi-value">{counts.get('appeal_unanswered',0)}</div></a>
 <div class="card"><div class="kpi-label">Foydalanuvchilar</div><div class="kpi-value">{counts.get('users',0)}</div></div>{suggestion_card}</div>"""
     rows = "".join(
         f'<tr><td class="num"><a href="/admin/appeals/{v.appeal.id}">{_e(v.appeal.appeal_number)}</a></td><td>{_e(v.user.full_name or "—")}</td><td>{_e(appeal_category_text(v.appeal.category_code,"uz_latn"))}</td><td>{_status_badge(v.effective_status)}</td><td>{_e(_dt(v.appeal.created_at))}</td></tr>'
@@ -221,7 +222,8 @@ async def appeals(request: web.Request) -> web.StreamResponse:
     except ValueError:
         page_num = 1
     params = {k: get.get(k, "") for k in ("q", "status", "category", "region", "district")}
-    result = await list_appeals(page=page_num, **params)
+    unanswered = get.get("unanswered", "") == "1"
+    result = await list_appeals(page=page_num, unanswered=unanswered, **params)
     options = '<option value="">Barcha holatlar</option>' + "".join(
         f'<option value="{s}" {"selected" if params["status"]==s else ""}>{_e(STATUS_LABELS[s])}</option>'
         for s in ("NEW", "IN_PROGRESS", "COMPLETED", "REJECTED")
@@ -239,7 +241,14 @@ async def appeals(request: web.Request) -> web.StreamResponse:
         f'<tr><td class="num"><a href="/admin/appeals/{v.appeal.id}">{_e(v.appeal.appeal_number)}</a></td><td>{_e(v.user.full_name or "—")}<br><span class="muted">{_e(v.user.phone or "—")}</span></td><td>{_e(v.user.region or "—")}<br><span class="muted">{_e(v.user.district or "—")}</span></td><td>{_e(appeal_category_text(v.appeal.category_code,"uz_latn"))}</td><td>{_status_badge(v.effective_status)}</td><td>{_e(v.appeal.admin_id or "—")}</td><td>{_e(_dt(v.appeal.created_at))}</td></tr>'
         for v in result.items
     ) or '<tr><td colspan="7" class="empty">Natija topilmadi.</td></tr>'
-    table = f'<div class="section"><div class="section-head"><h2>Murojaatlar ({result.total})</h2></div><div class="table-wrap"><table><thead><tr><th>Raqam</th><th>Foydalanuvchi</th><th>Hudud</th><th>Yo‘nalish</th><th>Holat</th><th>Admin</th><th>Sana</th></tr></thead><tbody>{rows}</tbody></table></div>{_page_links("/admin/appeals",result,params)}</div>'
+    page_params = dict(params)
+    if unanswered:
+        page_params["unanswered"] = "1"
+    quick_filters = (
+        '<a class="btn btn-warn" href="/admin/appeals?unanswered=1">⚠️ Javobsiz</a> '
+        '<a class="btn btn-light" href="/admin/appeals">Barchasi</a>'
+    )
+    table = f'<div class="section"><div class="section-head"><h2>Murojaatlar ({result.total})</h2><div>{quick_filters}</div></div><div class="table-wrap"><table><thead><tr><th>Raqam</th><th>Foydalanuvchi</th><th>Hudud</th><th>Yo‘nalish</th><th>Holat</th><th>Admin</th><th>Sana</th></tr></thead><tbody>{rows}</tbody></table></div>{_page_links("/admin/appeals",result,page_params)}</div>'
     return _html(_layout(ctx, title="Murojaatlar", active="appeals", body=filters+table))
 
 

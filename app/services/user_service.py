@@ -237,6 +237,24 @@ async def get_user_by_telegram_id(telegram_id: int) -> User | None:
         return result.scalar_one_or_none()
 
 
+async def list_broadcast_user_ids() -> list[int]:
+    """Return active, fully registered citizen Telegram ids for SUPERADMIN broadcasts."""
+    async with async_session() as session:
+        result = await session.scalars(
+            select(User.telegram_id)
+            .where(
+                User.telegram_status == TELEGRAM_STATUS_ACTIVE,
+                User.full_name.is_not(None),
+                User.phone.is_not(None),
+                User.phone_verified.is_(True),
+                User.region.is_not(None),
+                User.district.is_not(None),
+            )
+            .order_by(User.id.asc())
+        )
+        return list(result.all())
+
+
 async def get_user_language(telegram_id: int) -> str:
     user = await get_user_by_telegram_id(telegram_id)
     return normalize_language(user.language_code if user is not None else None)

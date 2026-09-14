@@ -6,18 +6,22 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.enums import ContentType
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.keyboards import (
     ADMIN_PANEL_CALLBACK_PREFIX,
     ADMIN_MANAGE_CALLBACK_PREFIX,
     ADMIN_ROLE_CALLBACK_PREFIX,
+    ADMIN_BROADCAST_CALLBACK_PREFIX,
     APPEAL_CANCEL_REPLY_CALLBACK_PREFIX,
     APPEAL_REPLY_CALLBACK_PREFIX,
     SUGGESTION_REVIEW_CALLBACK_PREFIX,
     admin_cancel_reply_keyboard,
     admin_panel_keyboard,
     admin_management_keyboard,
+    admin_broadcast_audience_keyboard,
+    admin_broadcast_confirm_keyboard,
     admin_role_keyboard,
     admin_reply_keyboard,
     suggestion_review_keyboard,
@@ -44,6 +48,7 @@ from app.services.appeal_service import (
     get_appeal_by_id,
     list_admin_appeals,
     list_unanswered_admin_appeals,
+    get_unanswered_appeal_summary,
     release_appeal_claim,
     search_appeal_by_number,
 )
@@ -55,10 +60,15 @@ from app.services.telegram_delivery import (
     send_long_message,
 )
 from app.services.delivery_status import DELIVERY_DELIVERED, DELIVERY_FAILED, classify_delivery_exception
-from app.services.user_service import get_user_by_id, mark_user_unreachable
+from app.services.user_service import (
+    get_user_by_id,
+    list_broadcast_user_ids,
+    mark_user_unreachable,
+)
 from app.services.suggestion_service import list_suggestions, review_suggestion, suggestion_counts
 from app.services.web_admin_auth import issue_login_url
-from app.states import AdminStates
+from app.states import AdminBroadcastStates, AdminStates
+from app.services.broadcast_service import broadcast_copied_message
 
 logger = logging.getLogger(__name__)
 
@@ -496,9 +506,13 @@ async def admin_panel_command(message: Message, state: FSMContext) -> None:
     await state.clear()
     role = await get_admin_role(message.from_user.id) or "ADMIN"
     superadmin = role == ROLE_SUPERADMIN
+    unanswered = await get_unanswered_appeal_summary(limit=1)
     await message.answer(
         f"👨‍💼 <b>Админ панель</b>\n\nРоль: <b>{role}</b>",
-        reply_markup=admin_panel_keyboard(superadmin=superadmin),
+        reply_markup=admin_panel_keyboard(
+            superadmin=superadmin,
+            unanswered_count=unanswered.total,
+        ),
     )
 
 
@@ -618,6 +632,155 @@ async def admin_manage_cancel(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith(f"{ADMIN_BROADCAST_CALLBACK_PREFIX}:"))
+async def admin_broadcast_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await is_superadmin(callback.from_user.id):
+        await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+        return
+
+    action = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+
+    if action == "cancel":
+        await state.clear()
+        if callback.message is not None:
+            role = await get_admin_role(callback.from_user.id) or ROLE_SUPERADMIN
+            unanswered = await get_unanswered_appeal_summary(limit=1)
+            await callback.message.answer(
+                "❌ Хабар юбориш бекор қилинди.",
+                reply_markup=admin_panel_keyboard(
+                    superadmin=role == ROLE_SUPERADMIN,
+                    unanswered_count=unanswered.total,
+                ),
+            )
+        await callback.answer("Бекор қилинди.")
+        return
+
+    if action in {"users", "admins"}:
+        recipients = (
+            await list_broadcast_user_ids() if action == "users" else await all_admin_ids()
+        )
+        if not recipients:
+            await callback.answer("Қабул қилувчилар топилмади.", show_alert=True)
+            return
+        await state.clear()
+        await state.update_data(broadcast_audience=action)
+        await state.set_state(AdminBroadcastStates.waiting_for_message)
+        audience_label = "фойдаланувчилар" if action == "users" else "админлар"
+        if callback.message is not None:
+            await callback.message.answer(
+                "📢 <b>Хабар тайёрлаш</b>\n\n"
+                f"Қабул қилувчилар: <b>{len(recipients)} та {audience_label}</b>.\n\n"
+                "Энди юбориладиган хабарни юборинг. Матн, фото, видео ёки PDF/ҳужжат бўлиши мумкин. "
+                "Хабар қабул қилувчиларга худди шу кўринишда нусхаланади."
+            )
+        await callback.answer()
+        return
+
+    if action == "confirm":
+        data = await state.get_data()
+        audience = data.get("broadcast_audience")
+        from_chat_id = data.get("broadcast_source_chat_id")
+        message_id = data.get("broadcast_source_message_id")
+        if (
+            audience not in {"users", "admins"}
+            or not isinstance(from_chat_id, int)
+            or not isinstance(message_id, int)
+        ):
+            await state.clear()
+            await callback.answer("Хабар маълумотлари топилмади. Қайта бошланг.", show_alert=True)
+            return
+
+        recipients = (
+            await list_broadcast_user_ids() if audience == "users" else await all_admin_ids()
+        )
+        if not recipients:
+            await state.clear()
+            await callback.answer("Қабул қилувчилар топилмади.", show_alert=True)
+            return
+
+        await callback.answer("Хабар юбориш бошланди.")
+        if callback.message is not None:
+            await callback.message.answer(
+                f"⏳ Хабар <b>{len(recipients)} та</b> қабул қилувчига юборилмоқда..."
+            )
+
+        # Clear before the potentially long send. A repeated confirm callback
+        # cannot start the same broadcast again through this FSM session.
+        await state.clear()
+        result = await broadcast_copied_message(
+            callback.bot,
+            recipients,
+            from_chat_id=from_chat_id,
+            message_id=message_id,
+            mark_unreachable_users=audience == "users",
+        )
+
+        if callback.message is not None:
+            unanswered = await get_unanswered_appeal_summary(limit=1)
+            await callback.message.answer(
+                "✅ <b>Хабар юбориш якунланди</b>\n\n"
+                f"👥 Жами: <b>{result.total}</b>\n"
+                f"✅ Юборилди: <b>{result.sent}</b>\n"
+                f"⚠️ Етиб бормади: <b>{result.failed}</b>\n"
+                f"🚫 Ботни блоклаган/мавжуд эмас: <b>{result.unreachable}</b>",
+                reply_markup=admin_panel_keyboard(
+                    superadmin=True,
+                    unanswered_count=unanswered.total,
+                ),
+            )
+        return
+
+    await callback.answer("Номаълум амал.", show_alert=True)
+
+
+@router.message(AdminBroadcastStates.waiting_for_message)
+async def admin_broadcast_message_received(message: Message, state: FSMContext) -> None:
+    if not await is_superadmin(message.from_user.id):
+        await state.clear()
+        await message.answer(NOT_ADMIN_TEXT)
+        return
+
+    allowed = {
+        ContentType.TEXT,
+        ContentType.PHOTO,
+        ContentType.VIDEO,
+        ContentType.DOCUMENT,
+        ContentType.ANIMATION,
+    }
+    if message.content_type not in allowed:
+        await message.answer(
+            "Бу турдаги хабар қўллаб-қувватланмайди. Матн, фото, видео, GIF ёки ҳужжат юборинг."
+        )
+        return
+
+    data = await state.get_data()
+    audience = data.get("broadcast_audience")
+    if audience not in {"users", "admins"}:
+        await state.clear()
+        await message.answer("Хабар қабул қилувчилари топилмади. /admin орқали қайта бошланг.")
+        return
+
+    recipients = await list_broadcast_user_ids() if audience == "users" else await all_admin_ids()
+    if not recipients:
+        await state.clear()
+        await message.answer("Қабул қилувчилар топилмади.")
+        return
+
+    await state.update_data(
+        broadcast_source_chat_id=message.chat.id,
+        broadcast_source_message_id=message.message_id,
+    )
+    await state.set_state(AdminBroadcastStates.waiting_for_confirmation)
+    audience_label = "фойдаланувчилар" if audience == "users" else "админлар"
+    await message.answer(
+        "🔎 <b>Юборишдан олдин текширинг</b>\n\n"
+        f"Қабул қилувчилар: <b>{len(recipients)} та {audience_label}</b>.\n"
+        "Юқоридаги хабар айнан шу кўринишда юборилади.\n\n"
+        "Юборишни тасдиқлайсизми?",
+        reply_markup=admin_broadcast_confirm_keyboard(),
+    )
+
+
 @router.callback_query(F.data.startswith(f"{ADMIN_PANEL_CALLBACK_PREFIX}:"))
 async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if not await is_admin(callback.from_user.id):
@@ -626,10 +789,24 @@ async def admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> No
     action = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
     if action == "home":
         role = await get_admin_role(callback.from_user.id) or ROLE_ADMIN
+        unanswered = await get_unanswered_appeal_summary(limit=1)
         if callback.message is not None:
             await callback.message.answer(
                 f"👨‍💼 <b>Админ панель</b>\n\nРоль: <b>{role}</b>",
-                reply_markup=admin_panel_keyboard(superadmin=role == ROLE_SUPERADMIN),
+                reply_markup=admin_panel_keyboard(
+                    superadmin=role == ROLE_SUPERADMIN,
+                    unanswered_count=unanswered.total,
+                ),
+            )
+    elif action == "broadcast":
+        if not await is_superadmin(callback.from_user.id):
+            await callback.answer(NOT_ADMIN_TEXT, show_alert=True)
+            return
+        await state.clear()
+        if callback.message is not None:
+            await callback.message.answer(
+                "📢 <b>Хабар юбориш</b>\n\nКимларга юборишни танланг:",
+                reply_markup=admin_broadcast_audience_keyboard(),
             )
     elif action == "admins":
         if not await is_superadmin(callback.from_user.id):

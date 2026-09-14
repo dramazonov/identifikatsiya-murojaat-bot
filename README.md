@@ -103,3 +103,12 @@ available in parallel and shares the same database claim/review rules.
 ## Stage 27 — daily unanswered appeal reminder
 
 In production, the bot schedules a daily reminder at **10:00 Asia/Tashkent**. If there are unanswered `NEW`/`IN_PROGRESS` appeals, every current ADMIN and SUPERADMIN receives one consolidated Telegram warning with counts and the oldest appeal numbers. The run is idempotent per Tashkent calendar day through the existing Redis-backed lease mechanism, so duplicate scheduler tasks do not create duplicate daily warnings. No message is sent when there are zero unanswered appeals.
+
+## Stage 28 — unanswered inbox + SUPERADMIN broadcast
+
+- `/admin` now shows a permanent `Javobsiz murojaatlar (N)` entry for every admin, so unanswered work can be opened without waiting for the 10:00 reminder.
+- Web Admin dashboard also shows the unanswered count, and `/admin/appeals?unanswered=1` provides a dedicated unanswered filter.
+- SUPERADMIN receives a `Xabar yuborish` flow with two audiences: registered active users or all current admins/superadmins.
+- Broadcasts support text, photo, video, GIF/animation and documents. The original Telegram message is copied as-is after an explicit confirmation step.
+- Broadcast delivery is throttled, handles Telegram flood-control retry, continues after per-recipient failures and marks blocked/deactivated citizen chats unreachable.
+- No database migration and no new environment variable are required.

@@ -32,6 +32,7 @@ SUGGESTION_REVIEW_CALLBACK_PREFIX = "suggestion_review"
 ADMIN_PANEL_CALLBACK_PREFIX = "admin_panel"
 ADMIN_MANAGE_CALLBACK_PREFIX = "admin_manage"
 ADMIN_ROLE_CALLBACK_PREFIX = "admin_role"
+ADMIN_BROADCAST_CALLBACK_PREFIX = "admin_broadcast"
 APPEAL_CATEGORY_CALLBACK_PREFIX = "appeal_cat"
 APPEAL_ATTACHMENT_SKIP_CALLBACK = "appeal_attach_skip"
 APPEAL_CONFIRM_CALLBACK = "appeal_confirm"
@@ -187,15 +188,65 @@ def suggestion_review_keyboard(suggestion_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def admin_panel_keyboard(*, superadmin: bool) -> InlineKeyboardMarkup:
+def admin_panel_keyboard(*, superadmin: bool, unanswered_count: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=f"⚠️ Жавобсиз мурожаатлар ({max(0, unanswered_count)})",
+            callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:unanswered",
+        )
+    )
     builder.row(InlineKeyboardButton(text="📨 Мурожаатлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:appeals"))
     if superadmin:
+        builder.row(
+            InlineKeyboardButton(
+                text="📢 Хабар юбориш",
+                callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:broadcast",
+            )
+        )
         builder.row(InlineKeyboardButton(text="💡 Таклифлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:suggestions"))
         builder.row(InlineKeyboardButton(text="👥 Админлар", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:admins"))
     builder.row(InlineKeyboardButton(text="🔎 Қидириш", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:search"))
     builder.row(InlineKeyboardButton(text="📊 Статистика", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:stats"))
     builder.row(InlineKeyboardButton(text="🌐 Web panel", callback_data=f"{ADMIN_PANEL_CALLBACK_PREFIX}:web"))
+    return builder.as_markup()
+
+
+def admin_broadcast_audience_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="👥 Фойдаланувчилар",
+            callback_data=f"{ADMIN_BROADCAST_CALLBACK_PREFIX}:users",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="👨‍💼 Админлар",
+            callback_data=f"{ADMIN_BROADCAST_CALLBACK_PREFIX}:admins",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="❌ Бекор қилиш",
+            callback_data=f"{ADMIN_BROADCAST_CALLBACK_PREFIX}:cancel",
+        )
+    )
+    return builder.as_markup()
+
+
+def admin_broadcast_confirm_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ Юбориш",
+            callback_data=f"{ADMIN_BROADCAST_CALLBACK_PREFIX}:confirm",
+        ),
+        InlineKeyboardButton(
+            text="❌ Бекор қилиш",
+            callback_data=f"{ADMIN_BROADCAST_CALLBACK_PREFIX}:cancel",
+        ),
+    )
     return builder.as_markup()
 
 

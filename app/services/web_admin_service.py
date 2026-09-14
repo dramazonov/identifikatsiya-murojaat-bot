@@ -91,8 +91,24 @@ async def dashboard_counts() -> dict[str, int]:
     if expired:
         counts["appeal_new"] = counts.get("appeal_new", 0) + expired
         counts["appeal_in_progress"] = max(0, counts.get("appeal_in_progress", 0) - expired)
+    async with async_session() as session:
+        unanswered = int(
+            (
+                await session.execute(
+                    select(func.count(Appeal.id)).where(
+                        Appeal.admin_answer.is_(None),
+                        Appeal.status.in_(("NEW", "IN_PROGRESS")),
+                    )
+                )
+            ).scalar_one()
+        )
     counts.update({f"suggestion_{status.lower()}": int(count) for status, count in suggestion_rows})
-    counts.update(users=users, appeals=total_appeals, suggestions=total_suggestions)
+    counts.update(
+        users=users,
+        appeals=total_appeals,
+        suggestions=total_suggestions,
+        appeal_unanswered=unanswered,
+    )
     return counts
 
 
@@ -104,6 +120,7 @@ async def list_appeals(
     category: str = "",
     region: str = "",
     district: str = "",
+    unanswered: bool = False,
 ) -> Page:
     page = max(1, page)
     async with async_session() as session:
@@ -129,6 +146,9 @@ async def list_appeals(
             predicates.append(User.region == region)
         if district:
             predicates.append(User.district == district)
+        if unanswered:
+            predicates.append(Appeal.admin_answer.is_(None))
+            predicates.append(Appeal.status.in_(("NEW", "IN_PROGRESS")))
         for predicate in predicates:
             stmt = stmt.where(predicate)
             count_stmt = count_stmt.where(predicate)

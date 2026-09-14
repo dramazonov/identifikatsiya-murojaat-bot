@@ -38,6 +38,13 @@ class AdminStates(StatesGroup):
     waiting_for_admin_role = State()
 
 
+class AdminBroadcastStates(StatesGroup):
+    """SUPERADMIN-only channel-like broadcast flow."""
+
+    waiting_for_message = State()
+    waiting_for_confirmation = State()
+
+
 class AdminContactStates(StatesGroup):
     """User-side state for "👨‍💼 Админ билан боғланиш" (composing the message)."""
 
