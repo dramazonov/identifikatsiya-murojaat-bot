@@ -4,7 +4,7 @@ from app.data.appeal_categories import APPEAL_CATEGORIES
 from app.handlers.account import _status_text
 from app.handlers.admin import _build_appeal_footer_text
 from app.i18n import SUPPORTED_LANGUAGES, appeal_category_text, appeal_status_text, t
-from app.keyboards import appeal_category_keyboard, appeal_confirmation_keyboard
+from app.keyboards import appeal_category_keyboard
 from app.models import Appeal
 from app.services.appeal_service import create_appeal
 from app.services.user_service import save_user
@@ -26,31 +26,14 @@ def test_categories_have_four_language_labels_and_callbacks():
             assert appeal_category_text(code, language).strip()
 
 
-def test_confirmation_keyboard_has_confirm_and_cancel():
-    keyboard = appeal_confirmation_keyboard("uz_latn")
-    callbacks = [
-        button.callback_data
-        for row in keyboard.inline_keyboard
-        for button in row
-        if button.callback_data
-    ]
-    assert callbacks == ["appeal_confirm", "appeal_cancel"]
 
 
-def test_stage24_flow_has_no_subject_state_and_pdf_only_prompt():
+def test_current_citizen_flow_is_category_then_text_only():
     assert not hasattr(AppealSubmissionStates, "waiting_for_subject")
-    prompt = t("appeal.attachment_prompt", "uz_latn").lower()
-    assert "pdf" in prompt
-    assert "foto" not in prompt
-    confirmation = t(
-        "appeal.confirmation",
-        "uz_latn",
-        category="Elektron baza",
-        attachment="Yo‘q",
-        appeal_text="Test murojaat",
-    )
-    assert "Mavzu" not in confirmation
-    assert "Test murojaat" in confirmation
+    assert hasattr(AppealSubmissionStates, "waiting_for_category")
+    assert hasattr(AppealSubmissionStates, "waiting_for_text")
+    prompt = t("appeal.text_prompt", "uz_latn").lower()
+    assert "murojaat" in prompt
 
 
 async def test_create_appeal_persists_simplified_metadata():
@@ -132,12 +115,7 @@ def test_stage24_translation_keys_are_complete():
     keys = (
         "appeal.category_prompt",
         "appeal.text_prompt",
-        "appeal.attachment_prompt",
-        "appeal.attachment_invalid",
-        "appeal.confirmation",
-        "appeal.confirm",
         "appeal.cancel",
-        "appeal.skip_attachment",
         "appeal.success_v2",
         "appeal.status_changed",
     )
