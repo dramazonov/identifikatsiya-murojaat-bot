@@ -7,6 +7,8 @@ from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app.data.regions import localize_location_value
+
 from app.i18n import (
     LANGUAGE_LABELS,
     SUPPORTED_LANGUAGES,
@@ -235,8 +237,8 @@ async def settings_profile(callback: CallbackQuery) -> None:
         full_name=user.full_name or "—",
         phone=user.phone or "—",
         verified=verified,
-        region=user.region or "—",
-        district=user.district or "—",
+        region=localize_location_value(user.region, language_code),
+        district=localize_location_value(user.district, language_code),
         language=language_label,
     )
     if callback.message is not None:

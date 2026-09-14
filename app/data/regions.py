@@ -290,3 +290,106 @@ REGIONS: list[str] = [name for name, _ in REGIONS_DATA]
 
 # region_id -> list of district/city names (index == district_id).
 DISTRICTS: dict[int, list[str]] = {idx: districts for idx, (_, districts) in enumerate(REGIONS_DATA)}
+
+# Citizen-facing localization -------------------------------------------------
+# Canonical database values remain the Uzbek-Cyrillic names above for backward
+# compatibility.  Only labels shown to the user are localized.
+
+_REGION_LABELS: dict[str, dict[str, str]] = {
+    "Қорақалпоғистон Республикаси": {"uz_latn": "Qoraqalpog‘iston Respublikasi", "uz_cyrl": "Қорақалпоғистон Республикаси", "ru": "Республика Каракалпакстан", "en": "Republic of Karakalpakstan"},
+    "Андижон вилояти": {"uz_latn": "Andijon viloyati", "uz_cyrl": "Андижон вилояти", "ru": "Андижанская область", "en": "Andijan Region"},
+    "Бухоро вилояти": {"uz_latn": "Buxoro viloyati", "uz_cyrl": "Бухоро вилояти", "ru": "Бухарская область", "en": "Bukhara Region"},
+    "Жиззах вилояти": {"uz_latn": "Jizzax viloyati", "uz_cyrl": "Жиззах вилояти", "ru": "Джизакская область", "en": "Jizzakh Region"},
+    "Қашқадарё вилояти": {"uz_latn": "Qashqadaryo viloyati", "uz_cyrl": "Қашқадарё вилояти", "ru": "Кашкадарьинская область", "en": "Kashkadarya Region"},
+    "Навоий вилояти": {"uz_latn": "Navoiy viloyati", "uz_cyrl": "Навоий вилояти", "ru": "Навоийская область", "en": "Navoi Region"},
+    "Наманган вилояти": {"uz_latn": "Namangan viloyati", "uz_cyrl": "Наманган вилояти", "ru": "Наманганская область", "en": "Namangan Region"},
+    "Самарқанд вилояти": {"uz_latn": "Samarqand viloyati", "uz_cyrl": "Самарқанд вилояти", "ru": "Самаркандская область", "en": "Samarkand Region"},
+    "Сурхондарё вилояти": {"uz_latn": "Surxondaryo viloyati", "uz_cyrl": "Сурхондарё вилояти", "ru": "Сурхандарьинская область", "en": "Surkhandarya Region"},
+    "Сирдарё вилояти": {"uz_latn": "Sirdaryo viloyati", "uz_cyrl": "Сирдарё вилояти", "ru": "Сырдарьинская область", "en": "Syrdarya Region"},
+    "Тошкент вилояти": {"uz_latn": "Toshkent viloyati", "uz_cyrl": "Тошкент вилояти", "ru": "Ташкентская область", "en": "Tashkent Region"},
+    "Фарғона вилояти": {"uz_latn": "Farg‘ona viloyati", "uz_cyrl": "Фарғона вилояти", "ru": "Ферганская область", "en": "Fergana Region"},
+    "Хоразм вилояти": {"uz_latn": "Xorazm viloyati", "uz_cyrl": "Хоразм вилояти", "ru": "Хорезмская область", "en": "Khorezm Region"},
+    "Тошкент шаҳри": {"uz_latn": "Toshkent shahri", "uz_cyrl": "Тошкент шаҳри", "ru": "город Ташкент", "en": "Tashkent City"},
+}
+
+_CYR_TO_LAT = {
+    "А":"A","а":"a","Б":"B","б":"b","В":"V","в":"v","Г":"G","г":"g",
+    "Д":"D","д":"d","Е":"E","е":"e","Ё":"Yo","ё":"yo","Ж":"J","ж":"j",
+    "З":"Z","з":"z","И":"I","и":"i","Й":"Y","й":"y","К":"K","к":"k",
+    "Л":"L","л":"l","М":"M","м":"m","Н":"N","н":"n","О":"O","о":"o",
+    "П":"P","п":"p","Р":"R","р":"r","С":"S","с":"s","Т":"T","т":"t",
+    "У":"U","у":"u","Ф":"F","ф":"f","Х":"X","х":"x","Ц":"S","ц":"s",
+    "Ч":"Ch","ч":"ch","Ш":"Sh","ш":"sh","Ъ":"’","ъ":"’","Ь":"","ь":"",
+    "Э":"E","э":"e","Ю":"Yu","ю":"yu","Я":"Ya","я":"ya","Ў":"O‘","ў":"o‘",
+    "Қ":"Q","қ":"q","Ғ":"G‘","ғ":"g‘","Ҳ":"H","ҳ":"h",
+}
+
+_RU_REPLACEMENTS = (
+    ("Тошкент", "Ташкент"), ("Андижон", "Андижан"), ("Бухоро", "Бухара"),
+    ("Жиззах", "Джизак"), ("Қашқадарё", "Кашкадарья"), ("Самарқанд", "Самарканд"),
+    ("Сурхондарё", "Сурхандарья"), ("Сирдарё", "Сырдарья"), ("Фарғона", "Фергана"),
+    ("Хоразм", "Хорезм"), ("Юнусобод", "Юнусабад"), ("Чилонзор", "Чиланзар"),
+    ("Мирзо Улуғбек", "Мирзо-Улугбек"), ("Шайхонтоҳур", "Шайхантахур"),
+    ("Олмазор", "Алмазар"), ("Яшнобод", "Яшнабад"), ("Яккасарой", "Яккасарай"),
+)
+
+
+def _uz_cyr_to_latn(text: str) -> str:
+    return "".join(_CYR_TO_LAT.get(ch, ch) for ch in text)
+
+
+def _ru_proper(text: str) -> str:
+    for old, new in _RU_REPLACEMENTS:
+        text = text.replace(old, new)
+    return (text.replace("Қ", "К").replace("қ", "к").replace("Ғ", "Г").replace("ғ", "г")
+                .replace("Ў", "У").replace("ў", "у").replace("Ҳ", "Х").replace("ҳ", "х"))
+
+
+def localize_region_name(canonical_name: str, language_code: str | None = None) -> str:
+    language = language_code if language_code in {"uz_latn", "uz_cyrl", "ru", "en"} else "uz_cyrl"
+    labels = _REGION_LABELS.get(canonical_name)
+    if labels:
+        return labels[language]
+    return canonical_name if language == "uz_cyrl" else _uz_cyr_to_latn(canonical_name)
+
+
+def localize_district_name(canonical_name: str, language_code: str | None = None) -> str:
+    language = language_code if language_code in {"uz_latn", "uz_cyrl", "ru", "en"} else "uz_cyrl"
+    if language == "uz_cyrl":
+        return canonical_name
+    if canonical_name.endswith(" шаҳри"):
+        stem = canonical_name[:-6]
+        if language == "uz_latn":
+            return f"{_uz_cyr_to_latn(stem)} shahri"
+        if language == "en":
+            return f"{_uz_cyr_to_latn(stem)} City"
+        return f"город {_ru_proper(stem)}"
+    if canonical_name.endswith(" тумани"):
+        stem = canonical_name[:-7]
+        if language == "uz_latn":
+            return f"{_uz_cyr_to_latn(stem)} tumani"
+        if language == "en":
+            return f"{_uz_cyr_to_latn(stem)} District"
+        return f"район {_ru_proper(stem)}"
+    if language == "ru":
+        return _ru_proper(canonical_name)
+    return _uz_cyr_to_latn(canonical_name)
+
+
+def region_label(region_id: int, language_code: str | None = None) -> str:
+    return localize_region_name(REGIONS[region_id], language_code)
+
+
+def district_label(region_id: int, district_id: int, language_code: str | None = None) -> str:
+    return localize_district_name(DISTRICTS[region_id][district_id], language_code)
+
+
+def localize_location_value(canonical_name: str | None, language_code: str | None = None) -> str:
+    if not canonical_name:
+        return "—"
+    if canonical_name in REGIONS:
+        return localize_region_name(canonical_name, language_code)
+    for districts in DISTRICTS.values():
+        if canonical_name in districts:
+            return localize_district_name(canonical_name, language_code)
+    return canonical_name

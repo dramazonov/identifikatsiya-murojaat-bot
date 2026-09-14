@@ -26,7 +26,7 @@ async def open_documents(message: Message, state: FSMContext) -> None:
     await state.clear()
     language = await get_user_language(message.from_user.id)
     await message.answer(t("menu.documents", language), reply_markup=remove_keyboard())
-    await message.answer(t("documents.intro", language), reply_markup=documents_list_keyboard())
+    await message.answer(t("documents.intro", language), reply_markup=documents_list_keyboard(language))
 
 
 @router.callback_query(F.data.startswith(f"{DOCUMENT_CALLBACK_PREFIX}:"))
@@ -39,7 +39,7 @@ async def show_document(callback: CallbackQuery) -> None:
         return
     if callback.message is not None:
         await callback.message.edit_text(
-            format_document_text(document),
+            format_document_text(document, language),
             reply_markup=document_detail_keyboard(document, language),
         )
     await callback.answer()
@@ -50,7 +50,7 @@ async def back_to_documents_list(callback: CallbackQuery) -> None:
     language = await get_user_language(callback.from_user.id)
     if callback.message is not None:
         await callback.message.edit_text(
-            t("documents.intro", language), reply_markup=documents_list_keyboard()
+            t("documents.intro", language), reply_markup=documents_list_keyboard(language)
         )
     await callback.answer()
 

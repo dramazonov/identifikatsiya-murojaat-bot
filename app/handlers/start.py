@@ -91,7 +91,7 @@ async def _route_incomplete_registration(
 
     if not user.region or not user.district:
         await state.set_state(Registration.waiting_for_region)
-        await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard())
+        await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard(language_code))
         return
 
     await _finish_registration_flow(message, state, language_code=language_code, intent=intent)
@@ -306,7 +306,7 @@ async def _finish_verified_phone(
         return
 
     await state.set_state(Registration.waiting_for_region)
-    await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard())
+    await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard(language_code))
 
 
 @router.callback_query(Registration.waiting_for_region, F.data.startswith("region:"))
@@ -322,7 +322,7 @@ async def process_region_selected(callback: CallbackQuery, state: FSMContext) ->
     if callback.message is not None:
         await callback.message.edit_text(
             t("registration.ask_district", language_code),
-            reply_markup=district_keyboard(region_id),
+            reply_markup=district_keyboard(region_id, language_code),
         )
     await callback.answer()
 
@@ -330,7 +330,7 @@ async def process_region_selected(callback: CallbackQuery, state: FSMContext) ->
 @router.message(Registration.waiting_for_region)
 async def process_region_invalid(message: Message, state: FSMContext) -> None:
     language_code = await _language_for_user(message.from_user.id, state)
-    await message.answer(t("registration.invalid_region", language_code), reply_markup=region_keyboard())
+    await message.answer(t("registration.invalid_region", language_code), reply_markup=region_keyboard(language_code))
 
 
 @router.callback_query(Registration.waiting_for_district, F.data.startswith("district:"))
@@ -379,10 +379,10 @@ async def process_district_invalid(message: Message, state: FSMContext) -> None:
     region_id = data.get("region_id")
     if region_id not in DISTRICTS:
         await state.set_state(Registration.waiting_for_region)
-        await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard())
+        await message.answer(t("registration.ask_region", language_code), reply_markup=region_keyboard(language_code))
         return
     await message.answer(
-        t("registration.invalid_district", language_code), reply_markup=district_keyboard(region_id)
+        t("registration.invalid_district", language_code), reply_markup=district_keyboard(region_id, language_code)
     )
 
 

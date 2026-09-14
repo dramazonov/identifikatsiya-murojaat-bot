@@ -10,9 +10,9 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.data.appeal_categories import APPEAL_CATEGORIES
-from app.data.documents import DOCUMENTS, get_document
-from app.data.faq import FAQ_CATEGORIES, get_category
-from app.data.regions import DISTRICTS, REGIONS
+from app.data.documents import DOCUMENTS, document_text, get_document
+from app.data.faq import FAQ_CATEGORIES, category_title, get_category, question_text
+from app.data.regions import DISTRICTS, REGIONS, district_label, region_label
 from app.i18n import (
     DEFAULT_LANGUAGE,
     LANGUAGE_LABELS,
@@ -96,19 +96,19 @@ def remove_keyboard() -> ReplyKeyboardRemove:
     return ReplyKeyboardRemove()
 
 
-def region_keyboard() -> InlineKeyboardMarkup:
+def region_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for region_id, name in enumerate(REGIONS):
-        builder.button(text=name, callback_data=f"{REGION_CALLBACK_PREFIX}:{region_id}")
+    for region_id, _name in enumerate(REGIONS):
+        builder.button(text=region_label(region_id, language_code), callback_data=f"{REGION_CALLBACK_PREFIX}:{region_id}")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def district_keyboard(region_id: int) -> InlineKeyboardMarkup:
+def district_keyboard(region_id: int, language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for district_id, name in enumerate(DISTRICTS[region_id]):
+    for district_id, _name in enumerate(DISTRICTS[region_id]):
         builder.button(
-            text=name, callback_data=f"{DISTRICT_CALLBACK_PREFIX}:{region_id}:{district_id}"
+            text=district_label(region_id, district_id, language_code), callback_data=f"{DISTRICT_CALLBACK_PREFIX}:{region_id}:{district_id}"
         )
     builder.adjust(1)
     return builder.as_markup()
@@ -372,12 +372,10 @@ def settings_language_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineK
 
 
 def faq_categories_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    # FAQ legal/knowledge-base content remains the official Uzbek-Cyrillic
-    # source in Stage 18A; Stage 18B will translate the knowledge-base itself.
     builder = InlineKeyboardBuilder()
     for category in FAQ_CATEGORIES:
         builder.button(
-            text=category["title"], callback_data=f"{FAQ_CATEGORY_CALLBACK_PREFIX}:{category['id']}"
+            text=category_title(category, language_code), callback_data=f"{FAQ_CATEGORY_CALLBACK_PREFIX}:{category['id']}"
         )
     builder.adjust(1)
     return builder.as_markup()
@@ -389,7 +387,7 @@ def faq_questions_keyboard(category_id: str, language_code: str = DEFAULT_LANGUA
     if category is not None:
         for index, question in enumerate(category["questions"]):
             builder.button(
-                text=question["question"],
+                text=question_text(question, language_code),
                 callback_data=f"{FAQ_QUESTION_CALLBACK_PREFIX}:{category_id}:{index}",
             )
     builder.adjust(1)
@@ -409,7 +407,7 @@ def faq_answer_keyboard(
         document = get_document(document_id)
         if document is not None:
             builder.button(
-                text=f"📚 {document['short_ref']}",
+                text=f"📚 {document_text(document, 'short_ref', language_code)}",
                 callback_data=f"{DOCUMENT_CALLBACK_PREFIX}:{document['id']}",
             )
     builder.adjust(1)
@@ -420,11 +418,11 @@ def faq_answer_keyboard(
     return builder.as_markup()
 
 
-def documents_list_keyboard() -> InlineKeyboardMarkup:
+def documents_list_keyboard(language_code: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for document in DOCUMENTS:
         builder.button(
-            text=document["short_ref"],
+            text=document_text(document, "short_ref", language_code),
             callback_data=f"{DOCUMENT_CALLBACK_PREFIX}:{document['id']}",
         )
     builder.adjust(1)

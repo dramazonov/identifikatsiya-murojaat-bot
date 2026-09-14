@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from app.data.documents import format_basis_line
-from app.data.faq import get_category, get_question
+from app.data.faq import answer_text, category_title, get_category, get_question, question_text
 from app.i18n import t
 from app.keyboards import (
     FAQ_BACK_CALLBACK,
@@ -42,7 +42,7 @@ async def show_questions(callback: CallbackQuery) -> None:
         return
     if callback.message is not None:
         await callback.message.edit_text(
-            f"{category['title']}\n\n{t('faq.choose_question', language)}",
+            f"{category_title(category, language)}\n\n{t('faq.choose_question', language)}",
             reply_markup=faq_questions_keyboard(category_id, language),
         )
     await callback.answer()
@@ -60,8 +60,8 @@ async def show_answer(callback: CallbackQuery) -> None:
         return
 
     related_documents = question.get("related_documents") or []
-    text = f"❓ <b>{question['question']}</b>\n\n{question['answer']}"
-    basis_line = format_basis_line(related_documents)
+    text = f"❓ <b>{question_text(question, language)}</b>\n\n{answer_text(question, language)}"
+    basis_line = format_basis_line(related_documents, language)
     if basis_line:
         text += f"\n\n{basis_line}"
     if callback.message is not None:
